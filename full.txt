@@ -1,0 +1,8 @@
+KEY_LEN: 7
+KEY: Teacher
+VALUE_LEN: 10
+VALUE: yiinghuang
+KEY_LEN: 6
+KEY: Singer
+VALUE_LEN: 5
+VALUE: SINNN

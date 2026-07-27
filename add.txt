@@ -1,0 +1,15 @@
+cmd: SET
+key_len: 8
+key: Teacher
+value_len: 5
+value: King
+cmd: MOD
+key_len: 8
+key: Teacher
+value_len: 11
+value: yiinghuang
+cmd: SET
+key_len: 7
+key: Singer
+value_len: 6
+value: SINNN

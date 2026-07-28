@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 
+#include "mempool.h"
 
 #define MAX_MSG_LENGTH		1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
@@ -43,28 +44,46 @@ void testcase(int connfd){
 
     while(1){
         char cmd[1024] = {0};
-        char key[1024] = {0};
-        char value[1024] = {0};
-        char tmp[1024] = {0};
+        char tmp[4096] = {0};
 		int exit_status = 0;
 		// get cmd
         fgets(cmd, sizeof(cmd),stdin);
         cmd[strcspn(cmd, "\n")] = '\0';
         int c_len = strlen(cmd);
 
+		int idx = 0;
+		char tcopy[4096] = {0};
 		// get key
         while(fgets(tmp, sizeof(tmp),stdin)){
-
+			
             if(strcmp(tmp, "q\n") == 0) {
                 break;
             }
-            strcat(key, tmp);
+			strcat(tcopy, tmp);
+			// /////////////////
+			idx++;
         }
-        int k_len = strlen(key);
-
+        int k_len = strlen(tcopy);
+		char *key = m_malloc(k_len * 2);
+		if(idx == 1){
+			tcopy[strcspn(tcopy, "\n")] = '\0';
+			sprintf(key, "+%d\r\n%s\r\n",k_len, tcopy);
+			memset(tcopy, 0, 4096);
+		}else{
+			if(k_len == -1){
+				snprintf(key, k_len, "$%d\r\n\r\n",k_len);
+			}else if(k_len == 0){
+				snprintf(key, k_len, "$%d\r\n",k_len);
+			}
+			printf("tcopy:%s\n",tcopy);
+			snprintf(key, k_len * 2, "$%d\r\n%s\r\n",k_len - 1, tcopy);
+			printf("key:%s",key);
+			memset(tcopy, 0, 4096);
+		}
 		// match cmd that need value
         int i = 0;
         int match = 0;
+		idx = 0;
         for(i = 0; i < 8; i ++){
             
             if(strcmp(cmd, cmds[i]) == 0){
@@ -77,11 +96,28 @@ void testcase(int connfd){
 				if(strcmp(tmp, "q\n") == 0) {
 					break;
 				}
-				strcat(value, tmp);
+				idx++;
+				strcat(tcopy, tmp);
 			}
-            int v_len = strlen(value);
-            sprintf(msg,"%s %d %s %d %s",cmd,k_len,key,v_len,value);
-			printf("send msg: %s\n",msg);
+            int v_len = strlen(tcopy);
+			char *value = m_malloc(v_len * 2);
+            if(idx == 1){
+				tcopy[strcspn(tcopy, "\n")] = '\0';
+				sprintf(value, "+%d\r\n%s\r\n",v_len, tcopy);
+				memset(tcopy, 0, 4096);
+			}else{
+				if(v_len == -1){
+					snprintf(value, v_len, "$%d\r\n\r\n",v_len);
+				}else if(v_len == 0){
+					snprintf(value, v_len, "$%d\r\n",v_len);
+				}
+				printf("tcopy:%s\n",tcopy);
+				snprintf(value, v_len * 2, "$%d\r\n%s\r\n",v_len - 1, tcopy);
+				printf("value:%s",value);
+				memset(tcopy, 0, 4096);
+			}
+			sprintf(msg, "%s %s %s",cmd, key, value);
+			m_free(value);
         }else{
             int k_len = strlen(key);
             sprintf(msg,"%s %d %s",cmd,k_len,key);
@@ -92,6 +128,7 @@ void testcase(int connfd){
         send_msg(connfd, msg, strlen(msg));
         memset(msg, 0, 4096);
 
+		m_free(key);
 		// quit
 		printf("Press \"quit\" to exit, other to continue\n");
 		while(fgets(tmp, sizeof(tmp),stdin)){

@@ -7,6 +7,7 @@
 #include <sys/time.h>
 
 #include "mempool.h"
+#include <ctype.h>
 
 #define MAX_MSG_LENGTH		1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
@@ -37,22 +38,46 @@ int recv_msg(int connfd, char *msg, int length) {
 
 }
 
+int is_number(char *msg){//1 true 0 false 
+	if(msg == NULL) return 0;
+	int i = 0;
+	int not_digit = 0;
+	for(i = 0; msg[i] != '\0'; i++){
+		if(!isdigit(msg[i])){
+			return 0;
+		}else{
+			not_digit = 1;
+			break;
+		}
+	}
+	if(not_digit) return 0;
+	return 1;
+}
 
-
-char msg[4096] = {0};
+int num = 0;
+char send_mes[4096] = {0};
 void testcase(int connfd){
 
     while(1){
-        char cmd[1024] = {0};
+		char msg[4096] = {0};
         char tmp[4096] = {0};
-		int exit_status = 0;
-		// get cmd
-        fgets(cmd, sizeof(cmd),stdin);
-        cmd[strcspn(cmd, "\n")] = '\0';
-        int c_len = strlen(cmd);
-
-		int idx = 0;
 		char tcopy[4096] = {0};
+		char cmd_tmp[128] = {0};
+		int exit_status = 0;
+		int idx = 0;
+
+		// get cmd
+        fgets(tmp, sizeof(tmp),stdin);
+        tmp[strcspn(tmp, "\n")] = '\0';
+        int c_len = strlen(tmp);
+		memcpy(cmd_tmp, tmp, c_len);
+		char *cmd = m_malloc(c_len + 1);
+		sprintf(cmd, "$%d\r\n%s\r\n",c_len, tmp);
+		memcpy(msg, cmd, strlen(cmd));
+		printf("cmd:%s\n",msg);
+		idx++;
+		memset(tmp, 0, 4096);
+
 		// get key
         while(fgets(tmp, sizeof(tmp),stdin)){
 			
@@ -60,75 +85,74 @@ void testcase(int connfd){
                 break;
             }
 			strcat(tcopy, tmp);
-			// /////////////////
-			idx++;
+
         }
+		idx++;
         int k_len = strlen(tcopy);
 		char *key = m_malloc(k_len * 2);
-		if(idx == 1){
-			tcopy[strcspn(tcopy, "\n")] = '\0';
-			sprintf(key, "+%d\r\n%s\r\n",k_len, tcopy);
-			memset(tcopy, 0, 4096);
-		}else{
-			if(k_len == -1){
-				snprintf(key, k_len, "$%d\r\n\r\n",k_len);
-			}else if(k_len == 0){
-				snprintf(key, k_len, "$%d\r\n",k_len);
-			}
-			printf("tcopy:%s\n",tcopy);
-			snprintf(key, k_len * 2, "$%d\r\n%s\r\n",k_len - 1, tcopy);
-			printf("key:%s",key);
-			memset(tcopy, 0, 4096);
+		if(k_len == -1){
+			snprintf(key, k_len, "$%d\r\n\r\n",k_len);
+		}else if(k_len == 0){
+			snprintf(key, k_len, "$%d\r\n",k_len);
 		}
+			// printf("tcopy:%s\n",tcopy);
+		snprintf(key, k_len + 6, "$%d\r\n%s\r\n",k_len - 1, tcopy);
+		strcat(msg, key);
+		printf("key:%s",key);
+		memset(tcopy, 0, 4096);
+		
 		// match cmd that need value
         int i = 0;
         int match = 0;
-		idx = 0;
         for(i = 0; i < 8; i ++){
-            
-            if(strcmp(cmd, cmds[i]) == 0){
+			
+            if(strcmp(cmd_tmp, cmds[i]) == 0){
                 match = 1;
                 break;
             }
         } 
+		
         if(match){
 			while(fgets(tmp, sizeof(tmp),stdin)){
 				if(strcmp(tmp, "q\n") == 0) {
 					break;
 				}
-				idx++;
+				
 				strcat(tcopy, tmp);
 			}
+			idx++;
             int v_len = strlen(tcopy);
 			char *value = m_malloc(v_len * 2);
-            if(idx == 1){
-				tcopy[strcspn(tcopy, "\n")] = '\0';
-				sprintf(value, "+%d\r\n%s\r\n",v_len, tcopy);
-				memset(tcopy, 0, 4096);
-			}else{
-				if(v_len == -1){
-					snprintf(value, v_len, "$%d\r\n\r\n",v_len);
-				}else if(v_len == 0){
-					snprintf(value, v_len, "$%d\r\n",v_len);
-				}
-				printf("tcopy:%s\n",tcopy);
-				snprintf(value, v_len * 2, "$%d\r\n%s\r\n",v_len - 1, tcopy);
-				printf("value:%s",value);
-				memset(tcopy, 0, 4096);
+            
+			if(v_len == -1){
+				snprintf(value, v_len, "$%d\r\n\r\n",v_len);
+			}else if(v_len == 0){
+				snprintf(value, v_len, "$%d\r\n",v_len);
 			}
-			sprintf(msg, "%s %s %s",cmd, key, value);
+			snprintf(value, v_len + 6, "$%d\r\n%s\r\n",v_len - 1, tcopy);
+			strcat(msg, value);
+			printf("value:%s",value);
+			memset(tcopy, 0, 4096);
 			m_free(value);
-        }else{
-            int k_len = strlen(key);
-            sprintf(msg,"%s %d %s",cmd,k_len,key);
-            printf("send msg: %s\n",msg);
         }
-        
-		// send request
-        send_msg(connfd, msg, strlen(msg));
-        memset(msg, 0, 4096);
+		
 
+		int length = strlen(msg);
+		char final_send_mes[length + 1];
+		memset(final_send_mes, 0, length + 1);
+
+		
+		// send request
+
+		sprintf(final_send_mes, "*%d\r\n", idx);
+		strcat(final_send_mes, msg);
+		strcat(send_mes, final_send_mes);
+        // send_msg(connfd, final_send_mes, strlen(final_send_mes));
+
+		m_free(cmd);
 		m_free(key);
+
+
 		// quit
 		printf("Press \"quit\" to exit, other to continue\n");
 		while(fgets(tmp, sizeof(tmp),stdin)){
@@ -145,6 +169,7 @@ void testcase(int connfd){
 		}
 		
     }
+	send_msg(connfd, send_mes, strlen(send_mes));
 }
 
 int connect_tcpserver(const char *ip, unsigned short port) {

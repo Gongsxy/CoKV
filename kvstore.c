@@ -128,7 +128,6 @@ int kvs_split_token(char *msg, char *tokens[], int *key_len, int *value_len){
                     if(tcopy[i] != '\n'){
                         char ch_buf[2] = {tcopy[i], '\0'};
                         strcat(tmp, ch_buf);// 3
-
                         break;
                     }else{
 
@@ -141,114 +140,76 @@ int kvs_split_token(char *msg, char *tokens[], int *key_len, int *value_len){
                 }
                 // cmd
                 if(cmd_before){
-                    // printf("enter\n");
 
                     if(tcopy[i]!='\r' && tcopy[i] != '\n'){
-                        // printf("enter\n");
-
 
                         char ch_buf[2] = {tcopy[i], '\0'};
                         strcat(tmp, ch_buf);// 3
-                        printf("tmp:%s",tmp);
                         break;
-                    }else{//\n
-                        
-                    // printf("enter\n");
 
-                            int cmd_len = atoi(tmp);
-                            tokens[0] = m_malloc(cmd_len + 1);
-                            memcpy(tokens[0], tmp, strlen(tmp));
-                            printf("cmd:%s\n",tokens[0]);
-                            i = i + cmd_len + 1;
-                            status = KEY;
-                            memset(tmp, 0, 4096);
-                            break;
+                    }else{//\n
+
+                        int cmd_len = atoi(tmp);
+                        tokens[0] = m_malloc(cmd_len + 1);
+                        memcpy(tokens[0], tmp, strlen(tmp));
+                        printf("cmd:%s\n",tokens[0]);
+                        i = i + cmd_len + 1;
+                        status = KEY;
+                        idx++;
+                        memset(tmp, 0, 4096);
+                        break;
                         
                     }
                 }
             }
             case KEY:{
-                if(tcopy[i] == '$') continue;
+                if(tcopy[i] == '$') break;;
                 if(tcopy[i] != '\n'){
                     char ch_buf[2] = {tcopy[i], '\0'};
                     strcat(tmp,ch_buf);
-                    continue;
+                    break;
                 }else{
-                    if(tcopy[i] == '\n'){
-                        continue;
-                    }else{
-                        *key_len = atoi(tmp);
-                        printf("i before:%d\n",i);
 
-                        memcpy(tokens[1], &tcopy[i], *key_len);
-                        printf("i after:%d\n",i);
+                    i++;
+                    *key_len = atoi(tmp);
 
-                        printf("key:%s\n",tokens[1]);
-                        memset(tmp, 0, 4096);
-                        i = i + *key_len;
-                        status = VALUE;
-                    }
+                    tokens[1] = m_malloc(*key_len + 1);
+                    memcpy(tokens[1], &tcopy[i], *key_len );
                     
+                    memset(tmp, 0, 4096);
+                    i = i + *key_len;
+                    idx++;
+                    status = VALUE;
+                    break;
+
                 }
             }
             case VALUE:{
-                if(tcopy[i] == '*'){
+                if(tcopy[i] == '$') break;
+                if(tcopy[i] != '\n'){
+                    char ch_buf[2] = {tcopy[i], '\0'};
+                    strcat(tmp,ch_buf);
+                    break;
+                }else{
+                    
+                    i++;
+                    *value_len = atoi(tmp);
+
+                    tokens[2] = m_malloc(*value_len + 1);
+                    memcpy(tokens[2], &tcopy[i], *value_len );
+                    
+                    memset(tmp, 0, 4096);
+                    i = i + *value_len;
+                    idx++;
                     status = CMD;
+                    break;
                 }
             }
         }
         i++;
     }
 
-//     char *cmd = strchr(tcopy,' ');
-//     // printf("cmd: %s\n",cmd);
-//     int cmd_len = cmd - tcopy;
-// #if 0
-//     tokens[0] = kvs_malloc(cmd_len + 1);
-// #else
-//     tokens[0] = m_malloc(cmd_len + 1);
-// #endif
-//     memcpy(tokens[0], tcopy, cmd_len);
-//     tokens[0][cmd_len] = '\0';
-//     idx++;
-//     tcopy = cmd + 1;
-//     *key_len = atoi(tcopy);
-//     while(*tcopy != ' ') tcopy ++;
-//     tcopy++;
-// #if 0
-//     tokens[1] = kvs_malloc(*key_len + 1);
-// #else
-//     tokens[1] = m_malloc(*key_len + 1);
-// #endif
-//     memcpy(tokens[1], tcopy, *key_len);
-//     tokens[1][*key_len - 1] = '\0';
-//     idx++;
 
-//     // value
-//     int i = 0;
-//     int match = 0;
-//     for(i = 0 ; i < 8 ; i ++){
-//         if(strcmp(tokens[0],key_value_command[i]) == 0){
-//             match = 1;
-//         }
-//     }
-//     if(match){
-//         tcopy += *key_len;
-//         *value_len = atoi(tcopy);
-//         tcopy ++;
-//         while(*tcopy != ' ') tcopy ++;
-//         tcopy++;
-// #if 0
-//         tokens[2] = kvs_malloc(*value_len + 1);
-// #else 
-//         tokens[2] = m_malloc(*value_len + 1);
-// #endif
-//         memcpy(tokens[2], tcopy, *value_len);
-
-//         tokens[2][*value_len -1] = '\0';
-//         idx++;
-//     }
-//     i ++;
     return idx;
 }
 
@@ -664,7 +625,7 @@ int kvs_protocol(char *msg, int length, char *response){
     char *tokens[KVS_TOKENS_MAX] = {0};
 
     int count = kvs_split_token(msg, tokens, &key_len, &value_len);
- 
+    printf("k_len:%d\nv_len:%d\n", key_len, value_len);
     int ret = kvs_protocol_filter(tokens,count,response,&key_len,&value_len);
 
 

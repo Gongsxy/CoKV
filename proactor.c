@@ -92,7 +92,7 @@ int set_event_accept(struct io_uring *ring, int sockfd, struct sockaddr *addr,
 
 // typedef int(*msg_handle) (char *msg, int length, char *response);
 static msg_handle kvs_handle;
-
+int total_length = 0;
 
 
 int proactor_start(unsigned short port, msg_handle handle) {
@@ -164,7 +164,6 @@ int proactor_start(unsigned short port, msg_handle handle) {
 					fd_list[fd_count].fd = connfd;
 					strcpy(fd_list[fd_count].ip, ip);
 					fd_count++;
-
 				}
 
 				set_event_recv(&ring, connfd, buffer, BUFFER_LENGTH, 0);
@@ -182,7 +181,7 @@ int proactor_start(unsigned short port, msg_handle handle) {
 					// printf("set_event_recv ret: %d, %s\n", ret, buffer); //
 
 					//int kvs_protocol(char *msg, int length, char *response);
-					ret = kvs_handle(buffer,ret,response);
+					ret = kvs_handle(buffer, ret, response);
 
 					char msg[TXT_LENGTH] = {0};
 					// memset(msg, 0, TXT_LENGTH);

@@ -3,7 +3,6 @@
 #include "kvstore.h"
 
 
-
 #if 1
 extern kvs_array_t globle_array;
 #endif
@@ -113,7 +112,8 @@ int is_number(char *msg){//1 true 0 false
 
 int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_flag){
     if(tokens == NULL || response == NULL) return -1;
-    printf("tokens:%s\n%s\n%s\n",tokens[0], tokens[1], tokens[2]);
+    
+    // printf("tokens:%s\n%s\n%s\n",tokens[0], tokens[1], tokens[2]);
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
         if(strcmp(tokens[0],command[i]) == 0){
@@ -507,189 +507,311 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
 };
 
 
-int kvs_split_token(char *msg, char *tokens[], int *key_len, int *value_len, int *push_flag){
+int kvs_split_token(char *msg, char *tokens[], int length, int *key_len, int *value_len, int *push_flag){
 
     if(msg == NULL || tokens == NULL) return -1;
     char *tcopy = msg;
     int idx = 0;
-
-    int i = 0;
-    int status = CMD;
-    char tmp[4096] = {0};
-
+    
     int origin_status = 1;
     int cmd_len_before = 0;
-    int cmd_before = 0;
-    int cmd_len = 0;
+
     int finish_single = 0;
     int single_num = 0;
     int skip = 1;
-    while(tcopy[i] != '\0'){
 
+    int i = 0;
+    int status = 0;
+    status = CMD;
+    char tmp[4096] = {0};
+
+    while(i < length){
+        //  && tcopy[i] != '\0'
+        // tcopy[i] < length
+        int move_flag = 1;
         switch(status){
             case CMD:{//OK
-                if(origin_status){
 
+                if(origin_status){   
+
+                    if(skip){
+
+                        if(tcopy[i] != '*'){
+                            break;
+                        }else{//OK
+
+                            i++;
+                            while(tcopy[i] != '\r'){
+                                char ch_buf[2] = {tcopy[i], '\0'};
+                                strcat(tmp,ch_buf);
+                                i++;
+                            }
+                            single_num = atoi(tmp);
+                            // printf("single_num:%d\n",single_num);
+                            if(tcopy[i] == '\r'){
+                                i += 2;
+                            }
+                            memset(tmp, 0, 4096);
+                            skip = 0;
+                            move_flag = 0;
+                            break;
+                        }
+                    }
                     
                     if(!skip){
-                        printf("enter !sikp\n");
+
                         if(tcopy[i] != '$'){
                             break;
                         }else{
                             cmd_len_before = 1;
                             origin_status = 0;
                             skip = 1;
-                            break;
-                        }
-                    }
-
-                    if(skip){
-                        printf("enter sikp\n");
-                        if(tcopy[i] != '*'){
-                            break;
-                        }else{//OK
-
                             i++;
-                            char ch_buf[2] = {tcopy[i], '\0'};
-                            strcat(tmp, ch_buf);
-                            single_num = atoi(tmp);
-                            // printf("single_num:%d\n",single_num);
-                            memset(tmp, 0, 4096);
-                            skip = 0;
+                            move_flag = 0;
                             break;
                         }
                     }
-                    
+
                 }
                 // $--> num
                 if(cmd_len_before){
 
-                    if(tcopy[i] != '\n'){
+                    if(tcopy[i] != '\r'){
+                        if(i >= length){
+                            return 0;
+                        }
                         char ch_buf[2] = {tcopy[i], '\0'};
                         strcat(tmp, ch_buf);// 3
                         break;
                     }else{
                         
-                        cmd_len = atoi(tmp);
+                        int cmd_len = atoi(tmp);
                         // printf("cmd_len:%d\n",cmd_len);
-
+                        if (tcopy[i] == '\r' && tcopy[i + 1] == '\n') i++;
                         i++;
+                        if(i + cmd_len > length){
+
+                            return 0;
+                        }
                         tokens[0] = m_malloc(cmd_len + 1);
                         memcpy(tokens[0], &tcopy[i], cmd_len);
                         tokens[0][cmd_len] = '\0';
-                        printf("cmd:%s\n",tokens[0]);
-                        i = i + cmd_len + 1;
+                        // printf("cmd:%s\n",tokens[0]);
+                        i = i + cmd_len;
+                        i += 2;
                         status = KEY;
                         finish_single++;
-                        idx++;
+                        // idx++;
                         memset(tmp, 0, 4096);
 
                         origin_status = 1;
+                        move_flag = 0;
                         break;
                     }
                 }
-                
+                break;
             }
             case KEY:{
-                if(tcopy[i] == '$') break;;
-                if(tcopy[i] != '\n'){
-                    char ch_buf[2] = {tcopy[i], '\0'};
-                    strcat(tmp,ch_buf);
-                    break;
-                }else{
+                
+                int len = 0;
+                if(tcopy[i] == '$') {
+                    len = 1;
                     i++;
+                    move_flag = 0;
+                }
+                if(len){
+
+                    while(tcopy[i] != '\r'){
+                        if(i >= length){
+                            return 0;
+                        }
+                        char ch_buf[2] = {tcopy[i], '\0'};
+                        strcat(tmp, ch_buf);
+                        i++;
+                    }
+                }
+
+                if(tcopy[i] == '\r'){
+                    
+                    i += 2;
                     *key_len = atoi(tmp);
+                    if(i + *key_len > length){
+                        return 0; // 数据不完整
+                    }
                     tokens[1] = m_malloc(*key_len + 1);
-                    memcpy(tokens[1], &tcopy[i], *key_len + 1);
+                    memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
                     // printf("key:%s\n",tokens[1]);
                     memset(tmp, 0, 4096);
-                    i = i + *key_len + 1;
-                    idx++;
+                    i = i + *key_len;
                     
-                    status = VALUE;
-                    finish_single++;
-                    break;
+                    i += 2;
 
+                    finish_single++;
+                    if(finish_single == single_num){
+                        status = CMD;
+                    }else{
+                        status = VALUE;
+                    }
+                    move_flag = 0;
+                    break;
                 }
+
+                break;
             }
             case VALUE:{
-                if(tcopy[i] == '$') break;
-
-                if(tcopy[i] == '*'){
-                    i--;
-                    status = CMD;
-                    break;
+// printf("status=%d i=%d char=%c\n",
+//        status,i,tcopy[i]);
+                int len = 0;
+                if(tcopy[i] == '$') {
+                    len = 1;
+                    i++;
+                    move_flag = 0;
+                }
+                if(len){
+                    while(tcopy[i] != '\r'){
+                        if(i >= length){
+                            return 0;
+                        }
+                        char ch_buf[2] = {tcopy[i], '\0'};
+                        strcat(tmp, ch_buf);
+                        i++;
+                    }
+                    
                 }
 
-                if(tcopy[i] != '\n'){
-                    char ch_buf[2] = {tcopy[i], '\0'};
-                    strcat(tmp,ch_buf);
-                    break;
-                }else{
-                    
-                    i++;
+                if(tcopy[i] == '\r'){
+
+                    i += 2;
                     *value_len = atoi(tmp);
+                    if(i + *value_len > length){
+                        // stop = 3;
+                        // save_i=i;
+                        return 0;
+                    }
                     tokens[2] = m_malloc(*value_len + 1);
                     memcpy(tokens[2], &tcopy[i], *value_len );
                     tokens[2][*value_len] = '\0';
                     // printf("value:%s\n",tokens[2]);
                     memset(tmp, 0, 4096);
-                    i = i + *value_len + 1;
-                    idx++;
+                    i = i + *value_len;
+                    i += 2;
+                    move_flag = 0;
+                    // idx++;
                     status = CMD;
                     finish_single++;
                     break;
+
                 }
+                break;
             }
         }
         //
         // printf("enter");
-        if(finish_single == single_num){
+        if(single_num > 0 && finish_single == single_num){
             // printf("enter\n");
+            
             kvs_protocol_filter(tokens, key_len, value_len, push_flag);
-            m_free(tokens[0]);
-            m_free(tokens[1]);
-            m_free(tokens[2]);
+            if(tokens[0]) m_free(tokens[0]);
+            if(tokens[1]) m_free(tokens[1]);
+            if(tokens[2]) m_free(tokens[2]);
             tokens[0] = NULL;
             tokens[1] = NULL;
             tokens[2] = NULL;
 
+            move_flag = 0;
             finish_single = 0;
+            single_num = 0;
+            cmd_len_before = 0;
+
+            origin_status = 1;
+            skip = 1;
+            status = CMD;
+
         } 
-        i++;
+        if(move_flag){
+            i++;
+        }
+
     }
 
+printf("finish return i=%d length=%d\n",i,length);
+    return i;
+}
 
-    return idx;
+int resv_is_complete(int length, char *msg){
+
 }
 
 
-int kvs_protocol(char *msg, int length, char *response){
+int kvs_is_complete(char *msg, int length){
 
+    int j = 0;
+    int total_length = 0;
+    char tbuf[128] = {0};
+    while(j + 1 < length && !(msg[j] == '\r' && msg[j + 1] == '\n')){
+        char ch_buf[2] = {msg[j], '\0'};
+        strcat(tbuf, ch_buf);
+        j++;
+    }
+    if(msg[j] == '\r' && msg[j + 1] == '\n'){
+        j += 2;
+    }
+    total_length = atoi(tbuf);
+
+    int i = j;
+    int num = 0;
+    char tmp[4096] = {0};
+    while(i < length){
+        num++;
+        i++;
+    }
+    if(num == total_length){
+        return 1;
+    }else return 0;
+    
+}
+
+
+char mes[4096] = {0};
+int mes_len= 0;
+int packet_len = 0;
+int kvs_protocol(char *msg, int length, char *response){
+printf("recv len=%d\n",length);
     int key_len = 0;
     int value_len = 0;
     int push_flag = 0;
-    memset(response, 0, BUFFER_LENGTH);
-    memcpy(response,msg,length);
-    if(strncmp(response, "save", 4) == 0){
-        kvs_array_save(&globle_array,save_message);
-        kvs_txt_full_load(save_message);
-        printf("save finished\n");
-        exit(1);
-    }
 
+    // memset(response, 0, BUFFER_LENGTH);
+    // memcpy(response,msg,length);
+    
+    memcpy(mes + mes_len,msg,length);
+    mes_len += length;
+
+    // if(strncmp(response, "save", 4) == 0){
+    //     kvs_array_save(&globle_array,save_message);
+    //     kvs_txt_full_load(save_message);
+    //     printf("save finished\n");
+    //     exit(1);
+    // }
 
     char *tokens[KVS_TOKENS_MAX] = {0};
-    int count = kvs_split_token(msg, tokens, &key_len, &value_len, &push_flag);
-    if(push_flag){
-        kvs_protocol_push(msg);
+    int count = 0;
+    packet_len = kvs_is_complete(mes, mes_len);
+    if(packet_len){
+        count = kvs_split_token(mes, tokens, mes_len, &key_len, &value_len, &push_flag);
+        if(push_flag){
+            kvs_protocol_push(msg);
+        }
+        memmove(mes, mes + packet_len, mes_len - packet_len);
+        mes_len -= packet_len;
     }
+    
     // printf("out k_len:%d\nv_len:%d\n", key_len, value_len);
     // int ret = kvs_protocol_filter(tokens,count,&key_len,&value_len);
 
 
-    return 0;
+    return count;
 }
 
 int init_kvs(void){
@@ -847,24 +969,24 @@ void kvs_txt_read(char *cmd, char *key, char *value){
 
                 if(strncmp(buf,"cmd: ",5) == 0){
                     int len = strlen(value);
-                    if(len>0 && value[len-1] == '\n'){
-                        value[len-1] = '\0';
+                    if(len > 0 && value[len] == '\n'){
+                        value[len] = '\0';
                     }
                     cmd[strcspn(cmd,"\r\n")]=0;
                     if(key_len > 0 && strlen(key) >= key_len){
-                        key[key_len - 1] = '\0';
+                        key[key_len] = '\0';
                     }
 
                     if(value_len > 0 && strlen(value) >= value_len){
-                        value[value_len - 1] = '\0';
+                        value[value_len] = '\0';
                     }
                     kvs_txt_load(cmd, key, value);
                     memset(cmd,0,TXT_LENGTH);
                     memset(key,0,TXT_LENGTH);
                     memset(value,0,TXT_LENGTH);
                     strcat(cmd, buf + 5);
-                    key_len=0;
-                    value_len=0;
+                    key_len = 0;
+                    value_len = 0;
                     status = CMD;
                 }else{
                     strcat(value, buf);
@@ -920,27 +1042,6 @@ int main(int argc, char const *argv[])
     }else if(mode == 2){
         proactor_start(port,kvs_protocol);
     }
-
-    // char tmp[128] = {0};
-    // int q_t = 0;
-    // while(fgets(tmp, sizeof(tmp),stdin)){
-    //     printf("enter while\n");
-    //     if(tmp == "quit\n"){
-    //         printf("enter quit\n");
-    //         memset(tmp,0,sizeof(tmp));
-    //         q_t = 1;
-    //         break;
-    //     }
-    //     if(tmp == "save\n"){
-    //         kvs_array_save(&globle_array,save_message);
-    //         kvs_txt_full_load(save_message);
-    //         printf("save finished\n");
-    //         memset(tmp, 0, 128);
-    //         break;
-    //     }
-
-
-    // };
 
     dest_kvs();
     return 0;

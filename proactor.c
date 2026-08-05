@@ -12,6 +12,7 @@
 extern int kvs_protocol(char *msg, int length, char *response);
 typedef int(*msg_handle) (char *msg, int length, char *response);
 
+
 struct conn_info {
 	int fd;
 	int event;
@@ -36,7 +37,6 @@ int pinit_server(unsigned short port) {
 	
 	return sockfd;
 }
-
 
 
 #define ENTRIES_LENGTH		1024
@@ -107,7 +107,7 @@ int proactor_start(unsigned short port, msg_handle handle) {
 	struct io_uring ring;
 	io_uring_queue_init_params(ENTRIES_LENGTH, &ring, &params);
 
-	
+	fd_list = m_malloc(sizeof(struct fd_info));
 #if 0
 	struct sockaddr_in clientaddr;	
 	socklen_t len = sizeof(clientaddr);
@@ -216,7 +216,7 @@ int proactor_start(unsigned short port, msg_handle handle) {
 
 		io_uring_cq_advance(&ring, nready);
 		// kvs_push_clear();		
-		
+		m_free(fd_list);
 	}
 
 }

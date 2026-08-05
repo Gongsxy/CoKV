@@ -2,7 +2,7 @@
 
 #include "kvstore.h"
 
-kvs_array_t globle_array = {0};
+// kvs_array_t *globle_array;
 
 int kvs_array_create(kvs_array_t *inst){
     if(!inst) return -1;
@@ -118,6 +118,22 @@ int kvs_array_exist(kvs_array_t *inst, char *key){
 
     if(!kvs_array_get(inst,key)){
         return 1;
+    }
+    return 0;
+}
+
+int kvs_array_save(kvs_array_t *inst, char *msg){
+    if(inst == NULL) return -1;
+
+    int i = 0;
+    for(i = 0; i < inst->total; i ++){
+        int key_len = 0;
+        int value_len = 0;
+        char tmp[128] = {0};
+        key_len = strlen(inst->table[i].key);
+        value_len = strlen(inst->table[i].value);
+        sprintf(tmp, "KEY_LEN: %d\nKEY: %s\nVALUE_LEN: %d\nVALUE: %s\n",key_len, inst->table[i].key, value_len, inst->table[i].value);
+        strcat(msg,tmp);
     }
     return 0;
 }

@@ -16,6 +16,7 @@
 
 #include <jemalloc/jemalloc.h>
 
+// #include "server.h"
 
 #define RED				1
 #define BLACK 			2
@@ -43,14 +44,19 @@
 #define FD_MAX				128
 
 #define INFO_LENGTH			1024
-#define BUFFER_LENGTH		1024
+#define BUF_LENGTH		1048576
+						
+
+int recv_total_length;
 
 struct fd_info {
     char ip[32];
     int fd;
 	char info[INFO_LENGTH];
+	char send_info[4096];
+	int s_len;
 };
-struct fd_info fd_list[128];
+extern struct fd_info *fd_list;
 char global_push_msg[INFO_LENGTH];
 
 
@@ -97,7 +103,7 @@ int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
 
 
 #define KVS_ARRAY_SIZE      1048576
-#define KVS_TOKENS_MAX      128
+#define KVS_TOKENS_MAX      1048576
 
 #if  ENABLE_ARRAY
 typedef int(*msg_handle)(char *msg, int length, char *response);
@@ -129,8 +135,9 @@ int kvs_array_set(kvs_array_t *inst, char *key, char *value);
 int kvs_array_del(kvs_array_t *inst, char *key);
 int kvs_array_mod(kvs_array_t *inst, char *key, char *value);
 int kvs_array_exist(kvs_array_t *inst, char *key);
+int kvs_array_save(kvs_array_t *inst,char *msg);
 
-
+extern kvs_array_t *globle_array;
 
 #if ENABLE_HASH
 #define MAX_KEY_LEN	128
@@ -138,6 +145,7 @@ int kvs_array_exist(kvs_array_t *inst, char *key);
 #define MAX_TABLE_SIZE	1024
 
 
+extern kvs_rbtree_t *globle_rbtree;
 
 typedef struct hashnode_s {
 
@@ -163,7 +171,7 @@ typedef struct hashtable_s {
 } hashtable_t;
 
 typedef struct hashtable_s kvs_hash_t;
-kvs_hash_t globle_hash;
+extern kvs_hash_t *globle_hash;
 
 int kvs_hash_create(kvs_hash_t *hash);
 void kvs_hash_destory(kvs_hash_t *hash);
@@ -205,7 +213,7 @@ typedef struct skiplist {
 
 typedef skiplist kvs_skiplist_t;
 
-// kvs_skiplist_t globle_skiplist;
+extern kvs_skiplist_t *globle_skiplist;
 
 int kvs_skiplist_create(kvs_skiplist_t *inst);
 void kvs_skiplist_destroy(kvs_skiplist_t *inst);
@@ -219,8 +227,8 @@ int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key);
 #if ENABLE_SAVE
 #define TXT_LENGTH	1024
 
-#define FULLSTORAGE     1
-#define ADDSTORAGE      0
+#define FULLSTORAGE     0
+#define ADDSTORAGE      1
 
 // int kvs_txt_write(const char *filename, char* key, char* value);
 // int kvs_txt_del(const char *filename, char* key);
@@ -236,8 +244,9 @@ char * kvs_txt_get(char *cmd, char* key, int *key_len);
 
 void kvs_txt_read(char *cmd, char *key, char *value);
 void kvs_txt_load(char *cmd, char *key, char *value);
-void kvs_txt_full_load(char *filename, FILE *tmp, char *key);
+void kvs_txt_full_load(char *msg);
 
+// void kvs_txt_load(char *cmd, char *key, char *value);
 
 #endif
 

@@ -18,6 +18,7 @@
 
 #define MAX_PORTS			20
 
+
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
 extern int kvs_protocol(char *msg, int length, char *response);
@@ -41,11 +42,11 @@ int send_cb(int fd);
 int epfd = 0;
 struct timeval begin;
 
+struct fd_info *fd_list = NULL;
 
-
-struct conn conn_list[CONNECTION_SIZE] = {0};
+struct conn *conn_list = NULL;
 // fd
-struct resp_info *resp_list[128] = {0};
+// struct resp_info *resp_list[128] = {0};
 
 int set_event(int fd, int event, int flag) {
 
@@ -233,6 +234,12 @@ int check_fd_to_ip(int fd, char *ip){
 
 int reactor_start(unsigned short port, msg_handle hand) {
 
+	// fd_list = m_malloc(sizeof(struct fd_info));
+	fd_list = malloc(sizeof(struct fd_info) * 1024);
+	conn_list = malloc(sizeof(struct conn) * 1024);
+
+	printf("fd_list=%p\n", fd_list);
+printf("conn_list=%p\n", conn_list);
 	// unsigned short port = 2000;
 	r_handle = hand;
 
@@ -272,6 +279,8 @@ int reactor_start(unsigned short port, msg_handle hand) {
 		}	
 
 	}
+	m_free(fd_list);
+	m_free(conn_list);
 }
 
 

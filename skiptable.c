@@ -2,7 +2,7 @@
 
 #include "kvstore.h"
 
-kvs_skiplist_t globle_skiplist;
+// kvs_skiplist_t *globle_skiplist;
 
 static int random_level(){
     int level = 1;

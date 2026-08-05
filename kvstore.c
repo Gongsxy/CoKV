@@ -4,19 +4,19 @@
 
 
 #if 1
-extern kvs_array_t globle_array;
+kvs_array_t *globle_array = NULL;
 #endif
 
 #if ENABLE_RBTREE
-extern kvs_rbtree_t globle_rbtree;
+kvs_rbtree_t *globle_rbtree = NULL;
 #endif
 
 #if ENABLE_HASH
-extern kvs_hash_t globle_hash;
+kvs_hash_t *globle_hash = NULL;
 #endif
 
 #if ENABLE_SKIPTABLE
-extern kvs_skiplist_t globle_skiplist;
+kvs_skiplist_t *globle_skiplist = NULL;
 #endif
 
 char save_message[4096] = {0};
@@ -130,7 +130,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
 
 #if ENABLE_ARRAY
         case KVS_CMD_SET:{
-            ret = kvs_array_set(&globle_array,key,value);
+            ret = kvs_array_set(globle_array,key,value);
 #if ADDSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
@@ -159,7 +159,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             kvs_txt_get(cmd, key, key_len);
             free(value);
 #endif 
-            char *result = kvs_array_get(&globle_array,key);
+            char *result = kvs_array_get(globle_array,key);
             if(result == NULL){
                 // length = sprintf(response,"NOT EXIST\r\n");
                 printf("NOT EXIST\r\n");
@@ -170,7 +170,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_DEL:{
-            ret = kvs_array_del(&globle_array,key);
+            ret = kvs_array_del(globle_array,key);
 #if ADDSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
@@ -190,7 +190,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_MOD:
-            ret = kvs_array_mod(&globle_array,key,value);
+            ret = kvs_array_mod(globle_array,key,value);
 #if ADDSTORAGE
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
@@ -209,7 +209,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             }
             break;
         case KVS_CMD_EXIST:
-            ret = kvs_array_exist(&globle_array,key);
+            ret = kvs_array_exist(globle_array,key);
 
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
@@ -224,7 +224,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
 // rbtree
 #if ENABLE_RBTREE
         case KVS_CMD_RSET:{
-            ret = kvs_rbtree_set(&globle_rbtree,key,value);
+            ret = kvs_rbtree_set(globle_rbtree,key,value);
 #if FULLSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
@@ -244,7 +244,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_RGET:{
-            char *result = kvs_rbtree_get(&globle_rbtree,key);
+            char *result = kvs_rbtree_get(globle_rbtree,key);
 #if FULLSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
@@ -263,7 +263,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_RDEL:
-            ret = kvs_rbtree_del(&globle_rbtree,key);
+            ret = kvs_rbtree_del(globle_rbtree,key);
 #if FULLSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
@@ -288,7 +288,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
 #if ADDSTORAGE
             kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
-            ret = kvs_rbtree_mod(&globle_rbtree,key,value);
+            ret = kvs_rbtree_mod(globle_rbtree,key,value);
             if(ret < 0){
                 // length = sprintf(response,"ERROR\r\n");
                 printf("ERROR\r\n");
@@ -301,7 +301,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             }
             break;
         case KVS_CMD_REXIST:
-            ret = kvs_rbtree_exist(&globle_rbtree,key);
+            ret = kvs_rbtree_exist(globle_rbtree,key);
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
                 // length = sprintf(response,"EXIST\r\n");
@@ -315,7 +315,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
 // hash
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
-            int ret = kvs_hash_set(&globle_hash,key,value);
+            int ret = kvs_hash_set(globle_hash,key,value);
 #if FULLSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
@@ -335,7 +335,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_HGET:{
-            char *result = kvs_hash_get(&globle_hash,key);
+            char *result = kvs_hash_get(globle_hash,key);
 #if FULLSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
@@ -354,7 +354,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_HDEL:
-            ret = kvs_hash_del(&globle_hash,key);
+            ret = kvs_hash_del(globle_hash,key);
 #if FULLSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
@@ -373,7 +373,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             }
             break;
         case KVS_CMD_HMOD:
-            ret = kvs_hash_mod(&globle_hash,key,value);
+            ret = kvs_hash_mod(globle_hash,key,value);
 #if FULLSTORAGE
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
@@ -392,7 +392,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             }
             break;
         case KVS_CMD_HEXIST:
-            ret = kvs_hash_exist(&globle_hash,key);
+            ret = kvs_hash_exist(globle_hash,key);
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
                 // length = sprintf(response,"EXIST\r\n");
@@ -407,7 +407,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
 #if ENABLE_SKIPTABLE
 
         case KVS_CMD_SSET:{
-            ret = kvs_skiplist_set(&globle_skiplist,key,value);
+            ret = kvs_skiplist_set(globle_skiplist,key,value);
 #if ADDSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
@@ -427,7 +427,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_SGET:{
-            char *result = kvs_skiplist_get(&globle_skiplist,key);
+            char *result = kvs_skiplist_get(globle_skiplist,key);
 #if ADDSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
@@ -446,7 +446,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_SDEL:{
-            ret = kvs_skiplist_del(&globle_skiplist,key);
+            ret = kvs_skiplist_del(globle_skiplist,key);
 #if ADDSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
@@ -466,7 +466,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             break;
         }
         case KVS_CMD_SMOD:
-            ret = kvs_skiplist_mod(&globle_skiplist,key,value);
+            ret = kvs_skiplist_mod(globle_skiplist,key,value);
 #if ADDSTORAGE
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
@@ -485,7 +485,7 @@ int kvs_protocol_filter(char **tokens, int *key_len, int *value_len, int *push_f
             }
             break;
         case KVS_CMD_SEXIST:
-            ret = kvs_skiplist_exist(&globle_skiplist,key);
+            ret = kvs_skiplist_exist(globle_skiplist,key);
 
             kvs_txt_exist(cmd, key, key_len);
 
@@ -523,7 +523,7 @@ int kvs_split_token(char *msg, char *tokens[], int length, int *key_len, int *va
     int i = 0;
     int status = 0;
     status = CMD;
-    char tmp[4096] = {0};
+    char tmp[1048576] = {0};
 
     while(i < length){
         //  && tcopy[i] != '\0'
@@ -739,9 +739,6 @@ printf("finish return i=%d length=%d\n",i,length);
     return i;
 }
 
-int resv_is_complete(int length, char *msg){
-
-}
 
 
 int kvs_is_complete(char *msg, int length){
@@ -773,7 +770,7 @@ int kvs_is_complete(char *msg, int length){
 }
 
 
-char mes[4096] = {0};
+char mes[1048576] = {0};
 int mes_len= 0;
 int packet_len = 0;
 int kvs_protocol(char *msg, int length, char *response){
@@ -782,9 +779,6 @@ printf("recv len=%d\n",length);
     int value_len = 0;
     int push_flag = 0;
 
-    // memset(response, 0, BUFFER_LENGTH);
-    // memcpy(response,msg,length);
-    
     memcpy(mes + mes_len,msg,length);
     mes_len += length;
 
@@ -816,42 +810,50 @@ printf("recv len=%d\n",length);
 
 int init_kvs(void){
 #if ENABLE_ARRAY
-    memset(&globle_array,0,sizeof(kvs_array_t));
-    kvs_array_create(&globle_array);
+    // memset(globle_array,0,sizeof(kvs_array_t));
+    globle_array = m_malloc(sizeof(kvs_array_t));
+    kvs_array_create(globle_array);
 #endif
 
 #if ENABLE_RBTREE
-    memset(&globle_rbtree,0,sizeof(kvs_rbtree_t));
-    kvs_rbtree_create(&globle_rbtree);
+    // memset(globle_rbtree,0,sizeof(kvs_rbtree_t));
+    globle_rbtree = m_malloc(sizeof(kvs_rbtree_t));
+    kvs_rbtree_create(globle_rbtree);
 #endif
 
 #if ENABLE_HASH
-    memset(&globle_hash,0,sizeof(kvs_hash_t));
-    kvs_hash_create(&globle_hash);
+    // memset(globle_hash,0,sizeof(kvs_hash_t));
+    globle_hash = m_malloc(sizeof(kvs_hash_t));
+    kvs_hash_create(globle_hash);
 #endif
 
 #if ENABLE_SKIPTABLE
-    memset(&globle_skiplist, 0, sizeof(kvs_skiplist_t));
-    kvs_skiplist_create(&globle_skiplist);
+    // memset(globle_skiplist, 0, sizeof(kvs_skiplist_t));
+    globle_skiplist = m_malloc(sizeof(kvs_skiplist_t));
+    kvs_skiplist_create(globle_skiplist);
 #endif
     return 0;
 }
 
 void dest_kvs(void){
 #if ENABLE_ARRAY
-kvs_array_destory(&globle_array);
+kvs_array_destory(globle_array);
+m_free(globle_array);
 #endif
 
 #if ENABLE_RBTREE
-kvs_rbtree_destory(&globle_rbtree);
+kvs_rbtree_destory(globle_rbtree);
+m_free(globle_rbtree);
 #endif
 
 #if ENABLE_HASH
-kvs_hash_destory(&globle_hash);
+kvs_hash_destory(globle_hash);
+m_free(globle_hash);
 #endif
 
 #if ENABLE_SKIPTABLE
-kvs_skiplist_destroy(&globle_skiplist);
+kvs_skiplist_destroy(globle_skiplist);
+m_free(globle_skiplist);
 #endif
 }
 
@@ -860,54 +862,54 @@ void kvs_txt_load(char *cmd, char *key, char *value){
     printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
 #if ENABLE_ARRAY
     if(strcmp(cmd,"SET") == 0){
-        kvs_array_set(&globle_array, key, value);
+        kvs_array_set(globle_array, key, value);
     }else if(strcmp(cmd,"DEL") == 0){
-        kvs_array_del(&globle_array, key);
+        kvs_array_del(globle_array, key);
     }else if(strcmp(cmd,"MOD") == 0){
-        kvs_array_mod(&globle_array, key, value);
+        kvs_array_mod(globle_array, key, value);
     }else if(strcmp(cmd,"GET") == 0){
-        kvs_array_get(&globle_array, key);
+        kvs_array_get(globle_array, key);
     }else if(strcmp(cmd,"EXIST") == 0){
-        kvs_array_exist(&globle_array, key);
+        kvs_array_exist(globle_array, key);
     }
 #endif
 #if ENABLE_RBTREE
     if(strcmp(cmd,"RSET") == 0){
-        kvs_rbtree_set(&globle_rbtree, key, value);
+        kvs_rbtree_set(globle_rbtree, key, value);
     }else if(strcmp(cmd,"RDEL") == 0){
-        kvs_rbtree_del(&globle_rbtree, key);
+        kvs_rbtree_del(globle_rbtree, key);
     }else if(strcmp(cmd,"RMOD") == 0){
-        kvs_rbtree_mod(&globle_rbtree, key, value);
+        kvs_rbtree_mod(globle_rbtree, key, value);
     }else if(strcmp(cmd,"RGET") == 0){
-        kvs_rbtree_get(&globle_rbtree, key);
+        kvs_rbtree_get(globle_rbtree, key);
     }else if(strcmp(cmd,"REXIST") == 0){
-        kvs_rbtree_exist(&globle_rbtree, key);
+        kvs_rbtree_exist(globle_rbtree, key);
     }
 #endif
 #if ENABLE_HASH
     if(strcmp(cmd,"HSET") == 0){
-        kvs_hash_set(&globle_hash, key, value);
+        kvs_hash_set(globle_hash, key, value);
     }else if(strcmp(cmd,"HDEL") == 0){
-        kvs_hash_del(&globle_hash, key);
+        kvs_hash_del(globle_hash, key);
     }else if(strcmp(cmd,"HMOD") == 0){
-        kvs_hash_mod(&globle_hash, key, value);
+        kvs_hash_mod(globle_hash, key, value);
     }else if(strcmp(cmd,"HGET") == 0){
-        kvs_hash_get(&globle_hash, key);
+        kvs_hash_get(globle_hash, key);
     }else if(strcmp(cmd,"HEXIST") == 0){
-        kvs_hash_exist(&globle_hash, key);
+        kvs_hash_exist(globle_hash, key);
     }
 #endif
 #if ENABLE_SKIPTABLE
     if(strcmp(cmd,"SSET") == 0){
-        kvs_skiplist_set(&globle_skiplist, key, value);
+        kvs_skiplist_set(globle_skiplist, key, value);
     }else if(strcmp(cmd,"SDEL") == 0){
-        kvs_skiplist_del(&globle_skiplist, key);
+        kvs_skiplist_del(globle_skiplist, key);
     }else if(strcmp(cmd,"SMOD") == 0){
-        kvs_skiplist_mod(&globle_skiplist, key, value);
+        kvs_skiplist_mod(globle_skiplist, key, value);
     }else if(strcmp(cmd,"SGET") == 0){
-        kvs_skiplist_get(&globle_skiplist, key);
+        kvs_skiplist_get(globle_skiplist, key);
     }else if(strcmp(cmd,"SEXIST") == 0){
-        kvs_skiplist_exist(&globle_skiplist, key);
+        kvs_skiplist_exist(globle_skiplist, key);
     }
 #endif
 }
@@ -1031,7 +1033,6 @@ int main(int argc, char const *argv[])
     int mode = atoi(argv[2]);
 
     init_kvs();
-
     char cmd[TXT_LENGTH]={0};
     char key[TXT_LENGTH]={0};
     char value[TXT_LENGTH]={0};

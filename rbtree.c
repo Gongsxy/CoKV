@@ -379,7 +379,7 @@ int main() {
 #endif
 
 
-kvs_rbtree_t globle_rbtree;
+// kvs_rbtree_t *globle_rbtree;
 
 int kvs_rbtree_create(kvs_rbtree_t *inst){
 

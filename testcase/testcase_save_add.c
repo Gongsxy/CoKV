@@ -63,12 +63,16 @@ int is_number(char *msg){//1 true 0 false
 }
 
 int num = 0;
-char send_mes[4096] = {0};
 void testcase(int connfd){
 	int length = 0;
 	int j = 0;
 	int total_num = 0;
-    for(total_num = 0; total_num < 40; total_num ++){
+	char *send_mes = malloc(4096000);
+	// char *send_mes = malloc(4096);
+
+	size_t cap = 4096000; 
+    size_t len = 0;
+    for(total_num = 0; total_num < 10; total_num ++){
 		
 		if(j == 10){
 			j = 0;
@@ -84,31 +88,37 @@ void testcase(int connfd){
 		int idx = 0;
 
 		// get cmd
-        strcpy(tmp,test_cmd[j]);
+        // strcpy(tmp,test_cmd[j]);
+		strcpy(tmp,"SET");
         tmp[strcspn(tmp, "\n")] = '\0';
         int c_len = strlen(tmp);
 		memcpy(cmd_tmp, tmp, c_len);
-		char *cmd = m_malloc(c_len + 1);
+
+		int cmd_size = snprintf(NULL,0,"$%d\r\n%s\r\n",c_len,tmp);
+		char *cmd = malloc(cmd_size + 1);
 		sprintf(cmd, "$%d\r\n%s\r\n",c_len, tmp);
 		// printf("cmd:%s\n",cmd);
 		memcpy(msg, cmd, strlen(cmd));
+		msg[strlen(cmd)] = '\0';
 		// length += strlen(cmd);
 		idx++;
 		memset(tmp, 0, 4096);
 
 		// get key
 		
-        strcpy(tmp, test_key);
+        // strcpy(tmp, test_key);
+		sprintf(tmp, "%s%d", test_key, total_num);
 
-        if(strcmp(tmp, "q\n") == 0) {
-            break;
-        }
+        // if(strcmp(tmp, "q\n") == 0) {
+        //     break;
+        // }
 		strcat(tcopy, tmp);
         
 		idx++;
         int k_len = strlen(tcopy);
 		// length += k_len;
-		char *key = m_malloc(k_len * 2);
+		int key_size = snprintf(NULL,0, "$%d\r\n%s\r\n",k_len,tcopy);
+		char *key = malloc(key_size + 1);
 		if(k_len == -1){
 			snprintf(key, k_len, "$%d\r\n\r\n",k_len);
 		}else if(k_len == 0){
@@ -133,9 +143,11 @@ void testcase(int connfd){
 		
         if(match){
 			if(j == 3 || j == 7){
-				strcpy(tmp, test_value_mod);
+				// strcpy(tmp, test_value_mod);
+				sprintf(tmp, "%s%d", test_value_mod, total_num);
 			}else{
-				strcpy(tmp, test_value);
+				// strcpy(tmp, test_value);
+				sprintf(tmp, "%s%d", test_value, total_num);
 			}
 				
 			strcat(tcopy, tmp);
@@ -143,7 +155,8 @@ void testcase(int connfd){
 			idx++;
             int v_len = strlen(tcopy);
 			// length += v_len;
-			char *value = m_malloc(v_len * 2);
+			int value_size = snprintf(NULL,0,"$%d\r\n%s\r\n",v_len,tcopy);
+			char *value = malloc(value_size + 1);
             
 			if(v_len == -1){
 				snprintf(value, v_len, "$%d\r\n\r\n",v_len);
@@ -155,7 +168,7 @@ void testcase(int connfd){
 			// length += strlen(value);
 			strcat(msg, value);
 			memset(tcopy, 0, 4096);
-			m_free(value);
+			free(value);
         }
 		
 
@@ -165,10 +178,18 @@ void testcase(int connfd){
 
 		sprintf(final_send_mes, "*%d\r\n", idx);
 		strcat(final_send_mes, msg);
-		strcat(send_mes, final_send_mes);
 
-		m_free(cmd);
-		m_free(key);
+		size_t need = strlen(final_send_mes);
+		if (len + need + 1 > cap) {
+            cap = cap * 2 + need;     
+            send_mes = realloc(send_mes, cap);
+        }
+		// strcat(send_mes, final_send_mes);
+		memcpy(send_mes + len, final_send_mes, need);  // Á¬ \0 Ò»Æð¿½
+        len += need;
+
+		free(cmd);
+		free(key);
 
 		j++;
 		
@@ -177,7 +198,7 @@ void testcase(int connfd){
 	// printf("send mes:%s\n",send_mes);
 	// printf("strlen=%ld\n", strlen(send_mes));
 	printf("send len=%ld\n",strlen(send_mes));
-	char tmp[4096] = {0};
+	char *tmp = malloc(len + 32);
 	length = strlen(send_mes);
 	memcpy(tmp, send_mes, length);
 	memset(send_mes,0, length);
@@ -207,6 +228,20 @@ int connect_tcpserver(const char *ip, unsigned short port) {
 	
 }
 
+int get_mes(char *cmd, char *key, char *value){
+	if(cmd == NULL || key == NULL){
+		printf("NO MES\n");
+	};
+	FILE * fp = fopen("test.txt", "a+");
+	if(value == NULL){
+		fprintf(fp, "cmd:%s\r\nkey:%s\r\nvalue:NULL\r\n", cmd, key);
+	}else{
+		fprintf(fp, "cmd:%s\r\nkey:%s\r\nvalue:%s\r\n", cmd, key, value);
+	}
+	fflush(fp);
+	fclose(fp);
+}
+
 
 // eg:
 // ./testcase 192.168.159.137 2000
@@ -219,11 +254,16 @@ int main(int argc, char *argv[]) {
 
 	char *ip = argv[1];
 	int port = atoi(argv[2]);
-
+	// int mode = atoi(argv[3]);
 
 	int connfd = connect_tcpserver(ip, port);
 
-	testcase(connfd);
+	// if(mode == 0){
+		testcase(connfd);
+	// }else if(mode == 1){
+
+	// }
+
 
 	return 0;
 	

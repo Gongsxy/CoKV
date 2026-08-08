@@ -9,6 +9,8 @@
 #include "mempool.h"
 #include <ctype.h>
 
+#include "testcase.h"
+
 #define MAX_MSG_LENGTH		1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
@@ -62,7 +64,7 @@ int is_number(char *msg){//1 true 0 false
 	return 1;
 }
 
-int num = 0;
+int send_num = 0;
 void testcase(int connfd){
 	int length = 0;
 	int j = 0;
@@ -185,9 +187,10 @@ void testcase(int connfd){
             send_mes = realloc(send_mes, cap);
         }
 		// strcat(send_mes, final_send_mes);
-		memcpy(send_mes + len, final_send_mes, need);  // Á¬ \0 Ò»Æð¿½
+		memcpy(send_mes + len, final_send_mes, need); 
         len += need;
 
+		send_num = len;
 		free(cmd);
 		free(key);
 
@@ -206,6 +209,23 @@ void testcase(int connfd){
 	strcat(send_mes, tmp);
 	length = strlen(send_mes);
 	send_msg(connfd, send_mes, length);
+}
+
+void get_old_mes(int connfd){
+	FILE *fp = fopen("../sync.log", "r");
+
+	char mes[1024] = {0};
+	while(fgets(mes, 128, fp)){
+		printf("%s",mes);
+		memset(mes, 0, 1024);
+	}	
+
+	fclose(fp);
+
+	FILE *fp_tmp = fopen("../sync.log", "w");
+	fclose(fp_tmp);
+
+	// send_msg(connfd, mes, strlen(mes));
 }
 
 int connect_tcpserver(const char *ip, unsigned short port) {
@@ -228,41 +248,34 @@ int connect_tcpserver(const char *ip, unsigned short port) {
 	
 }
 
-int get_mes(char *cmd, char *key, char *value){
-	if(cmd == NULL || key == NULL){
-		printf("NO MES\n");
-	};
-	FILE * fp = fopen("test.txt", "a+");
-	if(value == NULL){
-		fprintf(fp, "cmd:%s\r\nkey:%s\r\nvalue:NULL\r\n", cmd, key);
-	}else{
-		fprintf(fp, "cmd:%s\r\nkey:%s\r\nvalue:%s\r\n", cmd, key, value);
-	}
-	fflush(fp);
-	fclose(fp);
-}
 
 
 // eg:
 // ./testcase 192.168.159.137 2000
 int main(int argc, char *argv[]) {
 
-	if (argc != 3) {
+	if (argc != 4) {
 		printf("arg error\n");
 		return -1;
 	}
 
 	char *ip = argv[1];
 	int port = atoi(argv[2]);
-	// int mode = atoi(argv[3]);
+	int mode = atoi(argv[3]);
 
 	int connfd = connect_tcpserver(ip, port);
 
-	// if(mode == 0){
+	if(mode == 0){
+		get_old_mes(connfd);
+	}else if(mode == 1){
 		testcase(connfd);
+	}else if(mode == 3){
+		get_old_mes(connfd);
+		testcase(connfd);
+	}
+		
+	fgetc(stdin);
 	// }else if(mode == 1){
-
-	// }
 
 
 	return 0;

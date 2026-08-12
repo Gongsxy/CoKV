@@ -9,7 +9,8 @@
 #include "mempool.h"
 #include <ctype.h>
 
-#include "testcase.h"
+#include "../src/kvstore.h"
+#include "../src/load_conf.h"
 
 #define MAX_MSG_LENGTH		1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
@@ -91,7 +92,7 @@ void testcase(int connfd){
 
 		// get cmd
         // strcpy(tmp,test_cmd[j]);
-		strcpy(tmp,"SET");
+		strcpy(tmp,"RSET");
         tmp[strcspn(tmp, "\n")] = '\0';
         int c_len = strlen(tmp);
 		memcpy(cmd_tmp, tmp, c_len);
@@ -198,9 +199,8 @@ void testcase(int connfd){
 		
 		
     }
-	// printf("send mes:%s\n",send_mes);
 	// printf("strlen=%ld\n", strlen(send_mes));
-	printf("send len=%ld\n",strlen(send_mes));
+
 	char *tmp = malloc(len + 32);
 	length = strlen(send_mes);
 	memcpy(tmp, send_mes, length);
@@ -208,6 +208,7 @@ void testcase(int connfd){
 	sprintf(send_mes, "%d\r\n",length);
 	strcat(send_mes, tmp);
 	length = strlen(send_mes);
+	// printf("send mes:%s\n",send_mes);
 	send_msg(connfd, send_mes, length);
 }
 
@@ -249,30 +250,26 @@ int connect_tcpserver(const char *ip, unsigned short port) {
 }
 
 
-
+static Config cfg;
 // eg:
 // ./testcase 192.168.159.137 2000
 int main(int argc, char *argv[]) {
 
-	if (argc != 4) {
-		printf("arg error\n");
-		return -1;
+	load_config("../config/testcase_add.conf", &cfg);
+
+	int connfd = connect_tcpserver(cfg.ip, cfg.port);
+	if(cfg.get_old_mes_flag == 1) get_old_mes(connfd);	
+	if(cfg.mode == 1) testcase(connfd);
+	if(cfg.full_save_flag == 1){
+		char tmp[128] = {0};
+		while(fgets(tmp, sizeof(tmp), stdin)){
+			if(strcmp(tmp, "save\n") == 0) {
+				send_msg(connfd, tmp, strlen(tmp));
+                break;
+            }
+		}
 	}
-
-	char *ip = argv[1];
-	int port = atoi(argv[2]);
-	int mode = atoi(argv[3]);
-
-	int connfd = connect_tcpserver(ip, port);
-
-	if(mode == 0){
-		get_old_mes(connfd);
-	}else if(mode == 1){
-		testcase(connfd);
-	}else if(mode == 3){
-		get_old_mes(connfd);
-		testcase(connfd);
-	}
+	
 		
 	fgetc(stdin);
 	// }else if(mode == 1){

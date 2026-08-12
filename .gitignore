@@ -1,0 +1,8 @@
+hiredis/
+redis/
+.vscode/
+kvstore
+testcase/testcase_save_add
+testcase/Makefile
+*.o
+build/

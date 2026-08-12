@@ -5,15 +5,17 @@
 #ifndef __SERVER_H__
 #define __SERVER_H__
 
-#define BUFFER_LENGTH		1024
+#define BUFFER_LENGTH		102400
 
 
 typedef int (*RCALLBACK)(int fd);
 
 
+extern struct resp_info *resp_list[128]; 
+
 struct conn {
 	int fd;
-
+	int type;
 	char rbuffer[BUFFER_LENGTH];
 	int rlength;
 
@@ -27,6 +29,7 @@ struct conn {
 		RCALLBACK accept_callback;
 	} r_action;
 
+	int total_length;
 	int status;
 #if 1 // websocket
 	char *payload;
@@ -34,6 +37,7 @@ struct conn {
 #endif
 };
 
+extern struct conn *conn_list;
 
 int http_request(struct conn *c);
 int http_response(struct conn *c);

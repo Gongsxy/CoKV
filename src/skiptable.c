@@ -233,3 +233,25 @@ int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key){
 
     return 1;
 }
+
+int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg){
+    if(inst == NULL || msg == NULL) return -1;
+
+    skiplist_node *cur = inst->header->forward[0];
+    while (cur) {
+        int key_len = 0;
+        int value_len = 0;
+        char tmp[128] = {0};
+
+        key_len = strlen(cur->key);
+        value_len = strlen(cur->value);
+
+        sprintf(tmp, "cmd: SSET\r\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",key_len, cur->key, value_len, cur->value);
+        strcat(msg, tmp);
+
+        cur = cur->forward[0];
+    }
+
+    return 0;
+
+}

@@ -226,4 +226,31 @@ int kvs_hash_exist(kvs_hash_t *hash, char *key) {
 	
 }
 
+int kvs_hash_save(kvs_hash_t *hash, char *msg){
+    if(hash == NULL || msg == NULL)
+        return -1;
 
+    int i = 0;
+
+    for(i = 0; i < hash->max_slots; i++){
+
+        hashnode_t *node = hash->nodes[i];
+
+        while(node != NULL){
+
+            int key_len = strlen(node->key);
+            int value_len = strlen(node->value);
+
+            char tmp[256] = {0};
+
+            sprintf(tmp,"cmd: HSET\r\nkey_len: %d\r\nkey: %s\r\nvalue_len: %d\r\nvalue: %s\r\n",key_len,node->key,value_len,node->value
+            );
+
+            strcat(msg, tmp);
+
+            node = node->next;
+        }
+    }
+
+    return 0;
+}

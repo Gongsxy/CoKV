@@ -136,6 +136,7 @@ void rbtree_insert(rbtree *T, rbtree_node *z) {
 	rbtree_node *x = T->root;
 
 	while (x != T->nil) {
+		y = x;
 #if ENABLE_KEY_CHAR
 
 		if (strcmp(z->key,x->key) < 0){
@@ -413,6 +414,10 @@ int kvs_rbtree_set(kvs_rbtree_t *inst, char *key, char *value){
 	
 	rbtree_node *node = (rbtree_node*)kvs_malloc(sizeof(rbtree_node));
 
+	rbtree_node *exist = rbtree_search(inst, key);
+    if(exist != inst->nil) {
+        return 1;  // ¡û EXIST
+    }
 
 	node->key = kvs_malloc(strlen(key) + 1);
 	if(!node->key) return -2;
@@ -481,6 +486,30 @@ int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key){
 	if(!node) return 1;
 
 	if(node == inst->nil) return 1;
+
+	return 0;
+}
+
+
+static void rbtree_save_traversal(kvs_rbtree_t *T, rbtree_node *node, char *msg) {
+	if(node == T->nil) return;
+
+    rbtree_save_traversal(T, node->left, msg);
+
+    int offset = strlen(msg);
+
+    sprintf(msg + offset,"cmd: RSET\r\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",(int)strlen(node->key),node->key,(int)strlen(node->value),(char *)node->value);
+
+    rbtree_save_traversal(T, node->right, msg);
+}
+
+int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg) {
+	if (inst == NULL || msg == NULL) return -1;
+
+	char *msg_ptr = msg;
+	*msg_ptr = '\0';
+
+	rbtree_save_traversal(inst, inst->root, msg);
 
 	return 0;
 }

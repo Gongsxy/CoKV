@@ -132,7 +132,7 @@ int kvs_array_save(kvs_array_t *inst, char *msg){
         char tmp[128] = {0};
         key_len = strlen(inst->table[i].key);
         value_len = strlen(inst->table[i].value);
-        sprintf(tmp, "KEY_LEN: %d\nKEY: %s\nVALUE_LEN: %d\nVALUE: %s\n",key_len, inst->table[i].key, value_len, inst->table[i].value);
+        sprintf(tmp, "cmd: SET\r\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",key_len, inst->table[i].key, value_len, inst->table[i].value);
         strcat(msg,tmp);
     }
     return 0;

@@ -67,6 +67,7 @@ typedef struct son_conn{
 } connection;
 connection son;
 
+int kvs_protocol(char *msg, int length, char *response);
 int kvs_protocol_push(char *msg);
 int kvs_push_get(char *msg);
 void kvs_push_clear();
@@ -258,6 +259,15 @@ void *m_malloc(int size);
 void m_free(void *ptr);
 
 #endif
+
+int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
+static void rbtree_save_traversal(kvs_rbtree_t *T, rbtree_node *node, char *msg);
+int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
+int kvs_hash_save(kvs_hash_t *hash, char *msg);
+
+
+
+int get_mes();
 
 #endif
 #endif

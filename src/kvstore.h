@@ -45,7 +45,7 @@
 #define BUF_LENGTH		1048576
 						
 
-int recv_total_length;
+extern int recv_total_length;
 
 struct fd_info {
     char ip[32];
@@ -62,7 +62,7 @@ int check_fd_to_ip(int fd, char *ip);
 typedef struct son_conn{
 	int fd[FD_MAX];
 } connection;
-connection son;
+// connection son;
 
 int kvs_protocol(char *msg, int length, char *response);
 int kvs_protocol_push(char *msg);

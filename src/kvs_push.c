@@ -5,12 +5,14 @@ static char *global_push_msg = NULL;
 
 int kvs_protocol_push(char *msg){
     kvs_push_init();
-    memset(global_push_msg, 0, 3072000);
-    int length = sprintf(global_push_msg,"%s", msg);
+    strcat(global_push_msg,msg);
+    int length = strlen(global_push_msg);
+    // printf("push:%s\n", global_push_msg);
     return length;
 }
 
 int kvs_push_get(char *msg){
+    // printf("glo:%s\n",global_push_msg);
     if(msg == NULL || global_push_msg == NULL) return -1;
     strcpy(msg, global_push_msg);
     return strlen(msg);

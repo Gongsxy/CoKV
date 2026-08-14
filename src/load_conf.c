@@ -105,10 +105,16 @@ int load_config(const char *filename, Config *cfg){
                 if (!val) break;
                 while (*val == ' ') val++;
 
-                if(strcmp(mes, "ip") == 0){
+                if(strcmp(mes, "sync_ip") == 0){
                     strncpy(cfg->sync_ip, val, strlen(val));
                     cfg->sync_ip[strlen(val)] = '\0';
                     i++;
+                }
+                if(strcmp(mes, "push_flag") == 0){
+                    cfg->push_flag = atoi(val);
+                }
+                if(strcmp(mes, "is_salve") == 0){
+                    cfg->is_slave = atoi(val);
                 }
             }
         }

@@ -785,24 +785,6 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
 int kvs_is_complete(char *msg, int length){
 
-    // if (length < 4) return 0;
-
-    // int i = 0;
-    // char total_length[128] = {0};
-    // while(msg[i] != '\r'){
-    //     total_length[i] = msg[i];
-    //     i++;
-    // }
-    // i += 2;
-    // int real_length = atoi(total_length);
-
-    // int j = 0;
-
-    // if (i + real_length > length) {
-    //     return 0;  // 数据不够，等下次 recv
-    // }
-    // return 1;
-
     if (length < 4 || msg[0] != '*') return 0;
     
     int j = 1;
@@ -871,6 +853,7 @@ int kvs_protocol(char *msg, int length, char *response){
             free(mes_hash);
             free(mes_rbtree);
             free(mes_skip);
+            kvs_protocol_push(msg);
             return 0;
         }
 
@@ -889,14 +872,18 @@ int kvs_protocol(char *msg, int length, char *response){
         int packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break;  // 不够一条，等下次 recv
 
+        char single_cmd[4096] = {0};
+        memcpy(single_cmd, mes, packet_len);
+        single_cmd[packet_len] = '\0';
+
         char single_response[BUFFER_LENGTH] = {0};
         char *tokens[3] = {NULL, NULL, NULL};
         
         // 关键：传 packet_len（单条长度），不是 mes_len
-        int count = kvs_split_token(mes, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
+        int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
 
-        if(push_flag){
-            kvs_protocol_push(mes);
+        if(cfg.push_flag){
+            kvs_protocol_push(single_cmd);
         }
 
         // 把单条回复拼到总 response
@@ -910,7 +897,8 @@ int kvs_protocol(char *msg, int length, char *response){
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
-    printf("len:%d\n", total_response_len);
+
+    // printf("len:%d\n", total_response_len);
     return total_response_len; 
     
     // return count;

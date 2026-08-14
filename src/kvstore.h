@@ -57,7 +57,6 @@ struct fd_info {
 	int s_len;
 };
 extern struct fd_info *fd_list;
-char global_push_msg[INFO_LENGTH];
 
 
 int check_fd_to_ip(int fd, char *ip);
@@ -71,7 +70,8 @@ int kvs_protocol(char *msg, int length, char *response);
 int kvs_protocol_push(char *msg);
 int kvs_push_get(char *msg);
 void kvs_push_clear();
-
+void kvs_push_destroy();
+int kvs_push_init();
 
 #if ENABLE_RBTREE
 typedef char * KEY_TYPE;

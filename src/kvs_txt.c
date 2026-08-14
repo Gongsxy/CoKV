@@ -1,12 +1,15 @@
 
 #include "kvstore.h"
-
+#include "load_conf.h"
 
 enum {
     CMD,
     KEY,
     VALUE
 };
+
+static Config cfg;
+static char* filename = "add.txt";
 
 void kvs_txt_full_load(char *msg){
 
@@ -123,15 +126,17 @@ void kvs_txt_full_load(char *msg){
 
 int kvs_txt_write(char *cmd, char* key, char* value, int *key_len, int *value_len){
     if(key == NULL || value == NULL) return -1;
-    char* filename = "add.txt";
-#if ADDSTORAGE
-    FILE *fp = fopen(filename, "a+");
-    if(fp == NULL) return -1;
 
-    fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",cmd,*key_len,key,*value_len,value);
-    fflush(fp);
-    fclose(fp);
-#endif
+    load_config("config/server.conf", &cfg);
+
+    if(cfg.add_save == 1){
+        FILE *fp = fopen(filename, "a+");
+        if(fp == NULL) return -1;
+
+        fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",cmd,*key_len,key,*value_len,value);
+        fflush(fp);
+        fclose(fp);
+    }
 #if 0
     FILE *tmp = fopen("tmp.txt","w");
     if(tmp == NULL) return -1;
@@ -149,7 +154,7 @@ int kvs_txt_write(char *cmd, char* key, char* value, int *key_len, int *value_le
 };
 
 int kvs_txt_del(char *cmd, char* key, int *key_len){
-    char* filename = "add.txt";
+
     
 #if 0
 
@@ -164,32 +169,38 @@ int kvs_txt_del(char *cmd, char* key, int *key_len){
     remove(filename);
     rename("tmp.txt", filename);
 #endif
-#if ADDSTORAGE
+    load_config("../config/server.conf", &cfg);
+    int add_flag = cfg.add_save;
+    char* filename = "add.txt";
 
-    FILE *fp = fopen(filename, "a+");
-    if(fp == NULL) return -1;
+    if(cfg.add_save == 1){
+        FILE *fp = fopen(filename, "a+");
+        if(fp == NULL) return -1;
 
-    fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\n",cmd,*key_len,key);
-    fflush(fp);
-    fclose(fp);
-    
-#endif
+        fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\n",cmd,*key_len,key);
+        fflush(fp);
+        fclose(fp);
+    }
     return 0;
 }
 
 int kvs_txt_exist(char *cmd, char* key, int *key_len){
     if(key == NULL) return -1;
+
+    load_config("../config/server.conf", &cfg);
+    int add_flag = cfg.add_save;
     char* filename = "add.txt";
-#if ADDSTORAGE
 
-    FILE *fp = fopen(filename, "a+");
-    if(fp == NULL) return -1;
+    if(cfg.add_save == 1){
 
-    fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\n",cmd,*key_len,key);
-    fflush(fp);
-    fclose(fp);
+        FILE *fp = fopen(filename, "a+");
+        if(fp == NULL) return -1;
 
-#endif
+        fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\n",cmd,*key_len,key);
+        fflush(fp);
+        fclose(fp);
+    }
+
 #if 0
 
     FILE *tmp = fopen("tmp.txt", "w");
@@ -209,21 +220,25 @@ int kvs_txt_exist(char *cmd, char* key, int *key_len){
 }
 
 int kvs_txt_mod(char *cmd, char* key, char* value, int *key_len, int *value_len){
-    char* filename = "add.txt";
+
     if(key == NULL || value == NULL) return -1;
-#if  ADDSTORAGE
+    load_config("../config/server.conf", &cfg);
+    int add_flag = cfg.add_save;
+    char* filename = "add.txt";
 
-    FILE *fp = fopen(filename, "a+");
-    if(fp == NULL) {
-        return -1;
+    if(cfg.add_save == 1){
+
+        FILE *fp = fopen(filename, "a+");
+        if(fp == NULL) {
+            return -1;
+        }
+
+        fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",cmd, *key_len, key, *value_len, value);
+        fflush(fp);
+        
+        fclose(fp);
+
     }
-
-    fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",cmd, *key_len, key, *value_len, value);
-    fflush(fp);
-    
-    fclose(fp);
-
-#endif
 #if 0
     FILE *fp = fopen(filename, "r");
     if(fp == NULL)  return -1;
@@ -245,18 +260,24 @@ int kvs_txt_mod(char *cmd, char* key, char* value, int *key_len, int *value_len)
 }
 
 char * kvs_txt_get(char *cmd, char* key, int *key_len){
-    char* filename = "add.txt";
+
     if(key == NULL) return NULL;
 
-#if ADDSTORAGE
-    FILE *fp = fopen(filename, "a+");
-    if(fp == NULL) return NULL;
+    load_config("../config/server.conf", &cfg);
+    int add_flag = cfg.add_save;
+    char* filename = "add.txt";
 
-    fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\n", cmd, *key_len, key);
-    fflush(fp);
+    if(cfg.add_save == 1){
 
-    fclose(fp);
-#endif
+        FILE *fp = fopen(filename, "a+");
+        if(fp == NULL) return NULL;
+
+        fprintf(fp, "cmd: %s\nkey_len: %d\nkey: %s\n", cmd, *key_len, key);
+        fflush(fp);
+
+        fclose(fp);
+    }
+
 #if 0
 
     FILE *tmp = fopen("tmp.txt", "w");

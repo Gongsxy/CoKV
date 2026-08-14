@@ -8,7 +8,8 @@
 
 enum {
     server,
-    app
+    app,
+    sync
 };
 
 int load_config(const char *filename, Config *cfg){
@@ -22,7 +23,9 @@ int load_config(const char *filename, Config *cfg){
 
     int status = -1;
     char line[128] = {0};
+    int i = 0;
     while(fgets(line, 127, fp)){
+        
         line[strcspn(line, "\r\n")] = '\0';
 
         if(strcmp(line, "[server]") == 0){
@@ -32,6 +35,11 @@ int load_config(const char *filename, Config *cfg){
 
         if(strcmp(line, "[app]") == 0){
             status = app;
+            continue;
+        }
+
+        if(strcmp(line, "[SYNC]") == 0){
+            status = sync;
             continue;
         }
         
@@ -85,6 +93,23 @@ int load_config(const char *filename, Config *cfg){
                     cfg->load_old_mes = atoi(val);
                 }
                 break;
+            }
+            case sync:{
+                char *mes = strtok(line, "=");
+                if (!mes) break;    
+
+                char *k = mes + strlen(mes) - 1;
+                while (k > mes && *k == ' ') *k-- = '\0';
+
+                char *val = strtok(NULL, "=");
+                if (!val) break;
+                while (*val == ' ') val++;
+
+                if(strcmp(mes, "ip") == 0){
+                    strncpy(cfg->sync_ip, val, strlen(val));
+                    cfg->sync_ip[strlen(val)] = '\0';
+                    i++;
+                }
             }
         }
         memset(line, 0, 128);

@@ -118,6 +118,8 @@ int is_number(char *msg){//1 true 0 false
 	return 1;
 }
 
+// #define ADDSTORAGE      add_save_flag
+
 int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
     if(tokens == NULL || response == NULL) return -1;
     
@@ -139,13 +141,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_ARRAY
         case KVS_CMD_SET:{
             ret = kvs_array_set(globle_array,key,value);
-#if ADDSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
-#if FULLSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
-            
+            if(cfg.add_save == 1) {
+                kvs_txt_write(cmd, key, value, key_len, value_len);
+            }
             if(ret < 0){
                 length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
@@ -155,11 +153,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             }
             break;
         }
-        case KVS_CMD_GET:{
-#if ADDSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            m_free(value);
-#endif       
+        case KVS_CMD_GET:{       
+            if(cfg.add_save == 1) kvs_txt_get(cmd, key, key_len);
 #if FULLSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
@@ -176,9 +171,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_DEL:{
             ret = kvs_array_del(globle_array,key);
-#if ADDSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
+            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
 #if FULLSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
@@ -196,9 +189,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_MOD:{
             ret = kvs_array_mod(globle_array,key,value);
-#if ADDSTORAGE
-                kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
+            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
+
 #if FULLSTORAGE
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
@@ -232,12 +224,11 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_RBTREE
         case KVS_CMD_RSET:{
             ret = kvs_rbtree_set(globle_rbtree,key,value);
+            if(cfg.add_save == 1) kvs_txt_write(cmd, key, value, key_len, value_len);
 #if FULLSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
-#if ADDSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
+
             if(ret < 0){
                 length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
@@ -249,14 +240,14 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_RGET:{
             char *result = kvs_rbtree_get(globle_rbtree,key);
+            if(cfg.add_save == 1){
+                kvs_txt_get(cmd, key, key_len);
+                free(value);
+            }
 #if FULLSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
 #endif
-#if ADDSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif 
             if(result == NULL){
                 length = sprintf(response,"$-1\r\n");
                 // printf("NOT EXIST\r\n");
@@ -268,11 +259,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_RDEL:{
             ret = kvs_rbtree_del(globle_rbtree,key);
+            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
 #if FULLSTORAGE
             kvs_txt_del(cmd, key, key_len);
-#endif
-#if ADDSTORAGE
-                kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
                 length = sprintf(response,"-ERR internal error\r\n");
@@ -287,10 +276,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_RMOD:{
+            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
 #if FULLSTORAGE
-            kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
-#if ADDSTORAGE
             kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
             ret = kvs_rbtree_mod(globle_rbtree,key,value);
@@ -322,10 +309,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
             int ret = kvs_hash_set(globle_hash,key,value);
+            if(cfg.add_save == 1) kvs_txt_write(cmd, key, value, key_len, value_len);
 #if FULLSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
-#if ADDSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
@@ -339,11 +324,11 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_HGET:{
             char *result = kvs_hash_get(globle_hash,key);
+            if(cfg.add_save == 1){
+                kvs_txt_get(cmd, key, key_len);
+                free(value); 
+            }
 #if FULLSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif
-#if ADDSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
 #endif
@@ -358,10 +343,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_HDEL:{
             ret = kvs_hash_del(globle_hash,key);
+            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
 #if FULLSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
-#if ADDSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
@@ -378,10 +361,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_HMOD:{
             ret = kvs_hash_mod(globle_hash,key,value);
+            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
 #if FULLSTORAGE
-                kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
-#if ADDSTORAGE
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
@@ -410,12 +391,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #endif
 // skiplist
 #if ENABLE_SKIPTABLE
-
         case KVS_CMD_SSET:{
             ret = kvs_skiplist_set(globle_skiplist,key,value);
-#if ADDSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
+            if(cfg.add_save == 1) kvs_txt_write(cmd, key, value, key_len, value_len);
 #if FULLSTORAGE
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
@@ -429,11 +407,12 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_SGET:{
-            char *result = kvs_skiplist_get(globle_skiplist,key);
-#if ADDSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif    
+            char *result = kvs_skiplist_get(globle_skiplist,key);\
+            if(cfg.add_save == 1){
+                kvs_txt_get(cmd, key, key_len);
+                free(value);
+            }
+
 #if FULLSTORAGE
             kvs_txt_get(cmd, key, key_len);
             free(value);
@@ -449,9 +428,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_SDEL:{
             ret = kvs_skiplist_del(globle_skiplist,key);
-#if ADDSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
+            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
+
 #if FULLSTORAGE
             kvs_txt_del(cmd, key, key_len);
 #endif
@@ -469,9 +447,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_SMOD:{
             ret = kvs_skiplist_mod(globle_skiplist,key,value);
-#if ADDSTORAGE
-                kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
+            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
+
 #if FULLSTORAGE
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
@@ -490,7 +467,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         case KVS_CMD_SEXIST:
             ret = kvs_skiplist_exist(globle_skiplist,key);
 
-            kvs_txt_exist(cmd, key, key_len);
+            if(cfg.add_save == 1) kvs_txt_exist(cmd, key, key_len);
 
             if(ret == 0){
                 length = sprintf(response,":1\r\n");
@@ -512,32 +489,41 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_SYNC:{
-            FILE *fp = fopen("sync.log", "r");
+            FILE *fp;
+            if(cfg.add_save == 1){
+                if(cfg.full_save == 1){
+                    fp = fopen("add.txt", "r");
+                }
+
+            }else if(cfg.full_save == 1){
+                fp = fopen("full.txt", "r");
+            }
+            
             if (fp == NULL) {
-                // 文件不存在，直接回 DONE
                 length = sprintf(response, "$4\r\nDONE\r\n");
                 break;
             }
 
-            int offset = 0;
-            int remain = BUFFER_LENGTH - 16;  // 预留 DONE 的空间
-            char line[512] = {0};
 
-            // 一行一行读，直接拷进 response
-            while (fgets(line, sizeof(line), fp)) {
-                int n = strlen(line);
-                if (offset + n >= remain) {
-                    // buffer 满了，截断，剩下的下次 SYNC 再拿
-                    break;
-                }
-                memcpy(response + offset, line, n);
-                offset += n;
-            }
-            fclose(fp);
+            // int offset = 0;
+            // int remain = BUFFER_LENGTH - 16;  // 预留 DONE 的空间
+            // char line = malloc(4096000);
 
-            // 结束标记
-            offset += snprintf(response + offset, remain - offset, "$4\r\nDONE\r\n");
-            length = offset;
+            // // 一行一行读，直接拷进 response
+            // while (fgets(&line, sizeof(line), fp)) {
+            //     int n = strlen(line);
+            //     if (offset + n >= remain) {
+            //         // buffer 满了，截断，剩下的下次 SYNC 再拿
+            //         break;
+            //     }
+            //     memcpy(response + offset, line, n);
+            //     offset += n;
+            // }
+            // fclose(fp);
+
+            // // 结束标记
+            // offset += snprintf(response + offset, remain - offset, "$4\r\nDONE\r\n");
+            // length = offset;
             break;
         }
         default:{
@@ -639,6 +625,11 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         }
                         tokens[0] = m_malloc(cmd_len + 1);
                         memcpy(tokens[0], &tcopy[i], cmd_len);
+                        if (tokens[0]) {
+                            for(int k = 0; tokens[0][k]; k++) {
+                                tokens[0][k] = toupper(tokens[0][k]);
+                            }
+                        }
                         tokens[0][cmd_len] = '\0';
                         // printf("cmd:%s\n",tokens[0]);
                         i = i + cmd_len;
@@ -794,21 +785,54 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
 int kvs_is_complete(char *msg, int length){
 
-    int i = 0;
-    char total_length[128] = {0};
-    while(msg[i] != '\r'){
-        total_length[i] = msg[i];
-        i++;
-    }
-    i += 2;
-    int real_length = atoi(total_length);
+    // if (length < 4) return 0;
 
-    int j = 0;
+    // int i = 0;
+    // char total_length[128] = {0};
+    // while(msg[i] != '\r'){
+    //     total_length[i] = msg[i];
+    //     i++;
+    // }
+    // i += 2;
+    // int real_length = atoi(total_length);
 
-    if (i + real_length > length) {
-        return 0;  // 数据不够，等下次 recv
+    // int j = 0;
+
+    // if (i + real_length > length) {
+    //     return 0;  // 数据不够，等下次 recv
+    // }
+    // return 1;
+
+    if (length < 4 || msg[0] != '*') return 0;
+    
+    int j = 1;
+    char tbuf[128] = {0};
+    while (j < length && msg[j] != '\r') {
+        tbuf[j-1] = msg[j];
+        j++;
     }
-    return 1;
+    if (j + 1 >= length || msg[j] != '\r' || msg[j+1] != '\n') return 0;
+    
+    int count = atoi(tbuf);
+    j += 2;
+    
+    for (int k = 0; k < count; k++) {
+        if (j >= length || msg[j] != '$') return 0;
+        j++;
+        
+        char lenbuf[128] = {0};
+        int li = 0;
+        while (j < length && msg[j] != '\r') {
+            lenbuf[li++] = msg[j++];
+        }
+        if (j + 1 >= length || msg[j] != '\r' || msg[j+1] != '\n') return 0;
+        int slen = atoi(lenbuf);
+        j += 2;
+        
+        if (j + slen + 2 > length) return 0;
+        j += slen + 2;
+    }
+    return j;
 }
 
 
@@ -817,37 +841,6 @@ int kvs_protocol(char *msg, int length, char *response){
     int key_len = 0;
     int value_len = 0;
     int push_flag = 0;
-
-    // if (length > 0 && msg[0] != '*') {
-    //     // 找 \r\n 边界
-    //     int linelen = 0;
-    //     while (linelen < length - 1 && !(msg[linelen] == '\r' && msg[linelen+1] == '\n')) {
-    //         linelen++;
-    //     }
-    //     if (linelen >= length - 1) return 0;  // 数据不完整，等下次
-        
-    //     // 拷贝一行（去掉 \r\n）
-    //     char line[BUFFER_LENGTH] = {0};
-    //     memcpy(line, msg, linelen);
-    //     line[linelen] = '\0';
-        
-    //     // 按空格分割
-    //     char *tokens[3] = {NULL, NULL, NULL};
-    //     tokens[0] = strtok(line, " ");
-    //     tokens[1] = strtok(NULL, " ");
-    //     tokens[2] = strtok(NULL, " ");
-        
-    //     // 命令转大写
-    //     if (tokens[0]) {
-    //         for(int k = 0; tokens[0][k]; k++) {
-    //             tokens[0][k] = toupper(tokens[0][k]);
-    //         }
-    //     }
-        
-    //     memset(response, 0, BUFFER_LENGTH);
-    //     int count = kvs_protocol_filter(tokens, response, &key_len, &value_len, &push_flag);
-    //     return count;  // 内联命令直接返回，不走下面的 RESP 逻辑
-    // }
 
     static char *mes = NULL;
     static int mes_len = 0;
@@ -858,13 +851,13 @@ int kvs_protocol(char *msg, int length, char *response){
     
     if(cfg.full_save_flag == 1){
         if(strcmp(msg, "save\n") == 0){
-            char mes_array[4096] = {0};
+            char *mes_array = malloc(3072000);
             kvs_array_save(globle_array, mes_array);
-            char mes_skip[4096] = {0};
+            char *mes_skip = malloc(3072000);
             kvs_skiplist_save(globle_skiplist, mes_skip);
-            char mes_rbtree[4096] = {0};
+            char *mes_rbtree = malloc(3072000);
             kvs_rbtree_save(globle_rbtree, mes_rbtree);
-            char mes_hash[4096] = {0};
+            char *mes_hash = malloc(3072000);
             kvs_hash_save(globle_hash, mes_hash);
             FILE *fp_full = fopen("full.txt", "a+");
             fputs(mes_array, fp_full);
@@ -873,6 +866,11 @@ int kvs_protocol(char *msg, int length, char *response){
             fputs(mes_hash, fp_full);
             fflush(fp_full);
             fclose(fp_full);
+
+            free(mes_array);
+            free(mes_hash);
+            free(mes_rbtree);
+            free(mes_skip);
             return 0;
         }
 
@@ -885,21 +883,37 @@ int kvs_protocol(char *msg, int length, char *response){
     char *tokens[3] = {NULL, NULL, NULL};
     int count = 0;
 
-    
-    packet_len = kvs_is_complete(mes, mes_len);
-    // packet_len = kvs_is_complete(mes);
 
-    if(packet_len){
-        count = kvs_split_token(mes, tokens, response, mes_len, &key_len, &value_len, &push_flag);
+    int total_response_len = 0;
+    while (mes_len > 0) {
+        int packet_len = kvs_is_complete(mes, mes_len);
+        if (packet_len == 0) break;  // 不够一条，等下次 recv
+
+        char single_response[BUFFER_LENGTH] = {0};
+        char *tokens[3] = {NULL, NULL, NULL};
+        
+        // 关键：传 packet_len（单条长度），不是 mes_len
+        int count = kvs_split_token(mes, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
 
         if(push_flag){
             kvs_protocol_push(mes);
         }
+
+        // 把单条回复拼到总 response
+        int single_len = strlen(single_response);
+        if (total_response_len + single_len < BUFFER_LENGTH) {
+            memcpy(response + total_response_len, single_response, single_len);
+            total_response_len += single_len;
+        }
+
+        // 删掉已处理的这条
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
+    printf("len:%d\n", total_response_len);
+    return total_response_len; 
     
-    return count;
+    // return count;
 }
 
 int init_kvs(void){
@@ -1046,7 +1060,6 @@ void kvs_txt_load(char *cmd, char *key, char *value){
         kvs_skiplist_exist(globle_skiplist, key);
     }
 #endif
-    
     // save_old_mes(cmd, key, value);
     // send_old_mes(cmd, key, value);
 }
@@ -1090,6 +1103,10 @@ void kvs_add_read(char *cmd, char *key, char *value){
                     }
                     cmd[strcspn(cmd,"\r\n")]=0;
                     kvs_txt_load(cmd, key, value);
+                    if(cfg.add_save == 1){
+                        save_old_mes(cmd, key, value);
+                        
+                    }
                     memset(cmd,0,TXT_LENGTH);
                     memset(key,0,TXT_LENGTH);
                     memset(value,0,TXT_LENGTH);
@@ -1120,6 +1137,9 @@ void kvs_add_read(char *cmd, char *key, char *value){
                         value[value_len] = '\0';
                     }
                     kvs_txt_load(cmd, key, value);
+                    if(cfg.add_save == 1){
+                        save_old_mes(cmd, key, value);
+                    }
                     memset(cmd,0,TXT_LENGTH);
                     memset(key,0,TXT_LENGTH);
                     memset(value,0,TXT_LENGTH);
@@ -1149,6 +1169,10 @@ void kvs_add_read(char *cmd, char *key, char *value){
     }
     if(strlen(cmd) > 0){
         kvs_txt_load(cmd,key,value);
+        if(cfg.add_save == 1){
+            save_old_mes(cmd, key, value);
+            write_old_mes();
+        }
         memset(cmd,0,TXT_LENGTH);
         memset(key,0,TXT_LENGTH);
         memset(value,0,TXT_LENGTH);
@@ -1199,6 +1223,9 @@ void kvs_full_read(char *cmd, char *key, char *value){
                     }
                     cmd[strcspn(cmd,"\r\n")]=0;
                     kvs_txt_load(cmd, key, value);
+                    if(cfg.load_old_mes == 1){
+                        save_old_mes(cmd, key, value);
+                    }
                     memset(cmd,0,TXT_LENGTH);
                     memset(key,0,TXT_LENGTH);
                     memset(value,0,TXT_LENGTH);
@@ -1279,6 +1306,8 @@ void kvs_full_read(char *cmd, char *key, char *value){
     fclose(fp);
 }
 
+static int add_save_flag = 0;
+
 int main(int argc, char const *argv[])
 {
     // if(argc != 3) return -1;
@@ -1295,11 +1324,6 @@ int main(int argc, char const *argv[])
         if(cfg.add_save == 1) kvs_add_read(cmd, key, value);
         if(cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
-            // if(cfg.load_old_mes == 1){
-            //     printf("enter\n");
-            //     save_old_mes(cmd, key, value);
-            //     write_old_mes();
-            // }
         }
         reactor_start(cfg.port,kvs_protocol);
     }else if(cfg.mode == 2){
@@ -1310,5 +1334,6 @@ int main(int argc, char const *argv[])
         proactor_start(cfg.port,kvs_protocol);
     }
     dest_kvs();
+    kvs_push_destroy();
     return 0;
 }

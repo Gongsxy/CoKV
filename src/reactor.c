@@ -13,11 +13,13 @@
 
 #include "server.h"
 #include "kvstore.h"
+#include "load_conf.h"
 
 #define CONNECTION_SIZE			1024 // 1024 * 1024
 
 #define MAX_PORTS			20
 
+static Config cfg;
 
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
@@ -101,14 +103,14 @@ int accept_cb(int fd) {
 	char ip[128] = {0};
 	memset(ip, 0, sizeof(ip));
 	check_fd_to_ip(clientfd, ip);
-	if(strcmp(ip,"192.168.159.136") == 0){
+	if(strcmp(ip,cfg.sync_ip) == 0){
 		fd_list[fd_count].fd = clientfd;
 		strcpy(fd_list[fd_count].ip, ip);
 		fd_count++;
 		
 		// printf("save fd=%d\n",clientfd);
 	}
-	if(strcmp(ip,"192.168.159.129") == 0){
+	if(strcmp(ip,cfg.sync_ip) == 0){
 		fd_list[fd_count].fd = clientfd;
 		strcpy(fd_list[fd_count].ip, ip);
 		fd_count++;
@@ -234,6 +236,7 @@ int check_fd_to_ip(int fd, char *ip){
 	return 0;
 }
 
+
 int reactor_start(unsigned short port, msg_handle hand) {
 
 	// fd_list = m_malloc(sizeof(struct fd_info));
@@ -247,6 +250,8 @@ int reactor_start(unsigned short port, msg_handle hand) {
 	r_handle = hand;
 
 	epfd = epoll_create(1);
+
+	load_config("config/sync.conf", &cfg);
 
 	int i = 0;
 

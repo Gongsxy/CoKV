@@ -14,8 +14,6 @@
 #include <sys/time.h>
 #include <ctype.h>
 
-#include <jemalloc/jemalloc.h>
-
 // #include "server.h"
 
 #define RED				1

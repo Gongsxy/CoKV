@@ -10,6 +10,9 @@ typedef struct {
     int full_save_flag;
     int get_old_mes_flag;
     int load_old_mes;
+
+    // sync
+    char sync_ip[10];
 } Config;
 
 int load_config(const char *filename, Config *cfg);

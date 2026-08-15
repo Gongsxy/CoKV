@@ -102,6 +102,13 @@ void kvs_free(void *ptr){
 };
 #endif
 
+
+static char *mes = NULL;
+static char *sync_mes = NULL;
+static int   sync_mes_cap = 0;
+static int   sync_mes_len = 0;
+
+
 int is_number(char *msg){//1 true 0 false 
 	if(msg == NULL) return 0;
 	int i = 0;
@@ -489,37 +496,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_SYNC:{
-            FILE *fp;
-            if(cfg.add_save == 1){
-                if(cfg.full_save == 1){
-                    fp = fopen("add.txt", "r");
-                }
-
-            }else if(cfg.full_save == 1){
-                fp = fopen("full.txt", "r");
-            }
             
-            if (fp == NULL) {
-                length = sprintf(response, "$4\r\nDONE\r\n");
-                break;
-            }
-
-
-            // int offset = 0;
-            // int remain = BUFFER_LENGTH - 16;  // 预留 DONE 的空间
-            // char line = malloc(4096000);
-
-            // // 一行一行读，直接拷进 response
-            // while (fgets(&line, sizeof(line), fp)) {
-            //     int n = strlen(line);
-            //     if (offset + n >= remain) {
-            //         // buffer 满了，截断，剩下的下次 SYNC 再拿
-            //         break;
-            //     }
-            //     memcpy(response + offset, line, n);
-            //     offset += n;
-            // }
-            // fclose(fp);
 
             // // 结束标记
             // offset += snprintf(response + offset, remain - offset, "$4\r\nDONE\r\n");
@@ -818,13 +795,22 @@ int kvs_is_complete(char *msg, int length){
 }
 
 
+
+void sync_mes_init(void) {
+    if (sync_mes != NULL) return;  // 已经初始化过
+    
+    sync_mes_cap = 1024 * 1024 * 8;
+    sync_mes = calloc(1, sync_mes_cap);
+}
+
 int packet_len = 0;
 int kvs_protocol(char *msg, int length, char *response){
     int key_len = 0;
     int value_len = 0;
     int push_flag = 0;
 
-    static char *mes = NULL;
+    sync_mes_init();
+
     static int mes_len = 0;
     if (mes == NULL) {
         mes = malloc(3072000);
@@ -866,6 +852,100 @@ int kvs_protocol(char *msg, int length, char *response){
     char *tokens[3] = {NULL, NULL, NULL};
     int count = 0;
 
+    if(strcmp(msg, "SYNC\n") == 0){
+
+        FILE *fp = NULL;
+        if(cfg.add_save == 1){
+            fp = fopen("add.txt", "r");
+        }else if(cfg.full_save == 1){
+            fp = fopen("full.txt", "r");
+        }
+
+        if (!fp) {
+            sprintf(response, "$4\r\nDONE\r\n");
+            return 0;
+        }
+        
+        char line[1024];
+        char cmd[1024] = {0};
+        char key[1024] = {0};
+        char value[1024] = {0};
+        int has_key = 0, has_cmd = 0, has_value = 0;
+        int key_len = 0, value_len = 0;
+        memset(sync_mes, 0, sizeof(sync_mes));
+        while (fgets(line, sizeof(line), fp)) {
+
+            // line[strcspn(line, "\r\n")] = '\0';
+            
+            if (strncmp(line, "cmd: ", 5) == 0) {
+                sscanf(line, "cmd: %s\r\n", cmd);
+                has_cmd = 1;
+            }else if (strncmp(line, "key_len: ", 9) == 0) {
+                sscanf(line, "key_len: %d\r\n", &key_len);
+            }else if (strncmp(line, "key: ", 5) == 0) {
+                strncpy(key, line + 5, key_len);
+                key[key_len] = '\0';
+                // printf("key:%s", key);
+                has_key = 1;
+            }else if (strncmp(line, "value_len: ", 11) == 0) {
+                sscanf(line, "value_len: %d\r\n", &value_len);
+            }else if (strncmp(line, "value: ", 7) == 0) {
+                strncpy(value, line + 7, value_len);
+                value[value_len] = '\0';
+                // printf("value:%s", value);s
+                has_value = 1;
+            }
+            
+            int i = 0;
+            while(i < 8){
+                if(strcmp(cmd, key_value_command[i]) == 0){
+                    i = 10;
+                    break;
+                }
+            }
+            if(i = 10){
+                if (has_value == 1) {
+                    char resp[4096];
+                    int n = snprintf(resp, sizeof(resp),"*3\r\n$3\r\n%s\r\n$%ld\r\n%s\r\n$%ld\r\n%s\r\n",cmd, strlen(key), key, strlen(value), value);
+                    resp[n] = '\0';
+                    // printf("push_msg:%s\n", resp);
+                    // kvs_protocol_push(resp);
+                    if (sync_mes_len + n < sync_mes_cap) {
+                        memcpy(sync_mes + sync_mes_len, resp, n);
+                        sync_mes_len += n;
+                    }
+                    
+                    has_cmd = 0;
+                    has_key = 0;
+                    has_value = 0;
+                    key_len = 0;
+                    value_len = 0;
+                    cmd[0] = key[0] = value[0] = '\0';
+                }
+            }else{
+                if (has_key == 1) {
+                    char resp[4096];
+                    int n = snprintf(resp, sizeof(resp),"*2\r\n$3\r\n%s\r\n$%ld\r\n%s\r\n",cmd, strlen(key), key);
+                    
+                    resp[n] = '\0';
+                    strcat(sync_mes, resp);
+                    
+                    has_cmd = 0;
+                    has_key = 0;
+                    has_value = 0;
+                    key_len = 0;
+                    cmd[0] = key[0] = '\0';
+                }
+            }
+        }
+        
+        fclose(fp);
+        printf("SYNC:\n%s", sync_mes);
+        kvs_protocol_push(sync_mes);
+        sync_mes_len = 0;
+        sprintf(response, "$4\r\nDONE\r\n");
+    }
+
 
     int total_response_len = 0;
     while (mes_len > 0) {
@@ -878,27 +958,27 @@ int kvs_protocol(char *msg, int length, char *response){
 
         char single_response[BUFFER_LENGTH] = {0};
         char *tokens[3] = {NULL, NULL, NULL};
-        
-        // 关键：传 packet_len（单条长度），不是 mes_len
+
+
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
 
         if(cfg.push_flag){
             kvs_protocol_push(single_cmd);
         }
 
-        // 把单条回复拼到总 response
+
         int single_len = strlen(single_response);
         if (total_response_len + single_len < BUFFER_LENGTH) {
             memcpy(response + total_response_len, single_response, single_len);
             total_response_len += single_len;
         }
 
-        // 删掉已处理的这条
+
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
 
-    // printf("len:%d\n", total_response_len);
+    printf("len:%d\n", total_response_len);
     return total_response_len; 
     
     // return count;
@@ -953,6 +1033,110 @@ m_free(globle_skiplist);
 #endif
 }
 
+
+// char *kvs_protocol_combination(char *cmd, char *key, char *value){
+
+// 	int total_num = 0;
+// 	char *send_mes = malloc(4096000);
+// 	// char *send_mes = malloc(4096);
+
+// 	size_t cap = 4096000; 
+//     size_t len = 0;
+		
+		
+// 		// printf("total_num: %d\n",total_num);
+// 		char msg[4096] = {0};
+//         char *tmp = malloc(4096000);
+// 		char tcopy[4096] = {0};
+
+
+// 		char cmd_tmp[128] = {0};
+// 		int exit_status = 0;
+// 		int idx = 0;
+
+// 		// get cmd
+
+// 		strcpy(tmp,cmd);
+//         tmp[strcspn(tmp, "\n")] = '\0';
+//         int c_len = strlen(tmp);
+
+// 		sprintf(msg, "$%d\r\n%s\r\n",c_len, tmp);
+// 		// printf("cmd:%s\n",cmd);
+
+// 		msg[strlen(cmd)] = '\0';
+// 		// length += strlen(cmd);
+// 		idx++;
+// 		memset(tmp, 0, 4096000);
+
+// 		// get key
+
+// 		memcpy(tmp, key, strlen(key));
+
+// 		strcat(tcopy, tmp);
+        
+// 		idx++;
+//         int k_len = strlen(tcopy);
+
+// 		if(k_len == -1){
+// 			snprintf(msg + c_len, k_len, "$%d\r\n\r\n",k_len);
+// 		}else if(k_len == 0){
+// 			snprintf(msg + c_len, k_len, "$%d\r\n",k_len);
+// 		}else{
+// 			sprintf(msg + c_len, "$%d\r\n%s\r\n",k_len, tcopy);
+// 		}
+
+// 		memset(tcopy, 0, 4096);
+		
+// 		// match cmd that need value
+//         int i = 0;
+//         int match = 0;
+//         for(i = 0; i < 8; i ++){
+			
+//             if(strcmp(cmd_tmp, key_value_command[i]) == 0){
+//                 match = 1;
+//                 break;
+//             }
+//         } 
+		
+//         if(match){
+				
+// 			strcat(tcopy, value);
+
+// 			idx++;
+//             int v_len = strlen(tcopy);
+
+// 			if(v_len == -1){
+// 				snprintf(msg + c_len + k_len, v_len, "$%d\r\n\r\n",v_len);
+// 			}else if(v_len == 0){
+// 				snprintf(msg + c_len + k_len, v_len, "$%d\r\n",v_len);
+// 			}else{
+// 				sprintf(msg + c_len + k_len, "$%d\r\n%s\r\n",v_len, tcopy);
+// 			}
+// 			// length += strlen(value);
+// 			memset(tcopy, 0, 4096);
+//         }
+		
+
+// 		char final_send_mes[4096] = {0};
+		
+// 		// send request
+
+// 		sprintf(final_send_mes, "*%d\r\n", idx);
+// 		strcat(final_send_mes, msg);
+
+// 		size_t need = strlen(final_send_mes);
+// 		if (len + need + 1 > cap) {
+//             cap = cap * 2 + need;     
+//             send_mes = realloc(send_mes, cap);
+//         }
+// 		// strcat(send_mes, final_send_mes);
+// 		memcpy(send_mes + len, final_send_mes, need); 
+//         len += need;
+		
+    
+// 	printf("conbine send_mes:%s\n", send_mes);
+//     return send_mes;
+// }
 
 
 int origin_size = 0;

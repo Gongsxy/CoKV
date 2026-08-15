@@ -14,18 +14,18 @@ int kvs_protocol_push(char *msg){
 int kvs_push_get(char *msg){
     // printf("glo:%s\n",global_push_msg);
     if(msg == NULL || global_push_msg == NULL) return -1;
-    strcpy(msg, global_push_msg);
+    memcpy(msg, global_push_msg, 1024 * 1024 * 8);
     return strlen(msg);
 }
 
 void kvs_push_clear(){
     if(global_push_msg == NULL) return;
-    memset(global_push_msg, 0, 3072000);
+    memset(global_push_msg, 0, 1024 * 1024 * 8);
 }
 
 int kvs_push_init(){
     if(global_push_msg == NULL){
-        global_push_msg = malloc(3072000);
+        global_push_msg = malloc(1024 * 1024 * 8);
         if(global_push_msg == NULL){
             perror("malloc push buffer failed");
             return -1;

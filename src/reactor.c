@@ -103,6 +103,7 @@ int accept_cb(int fd) {
 	char ip[128] = {0};
 	memset(ip, 0, sizeof(ip));
 	check_fd_to_ip(clientfd, ip);
+
 	if(strcmp(ip,cfg.sync_ip) == 0){
 		fd_list[fd_count].fd = clientfd;
 		strcpy(fd_list[fd_count].ip, ip);
@@ -110,12 +111,12 @@ int accept_cb(int fd) {
 		
 		// printf("save fd=%d\n",clientfd);
 	}
-	if(strcmp(ip,cfg.sync_ip) == 0){
-		fd_list[fd_count].fd = clientfd;
-		strcpy(fd_list[fd_count].ip, ip);
-		fd_count++;
-		// printf("save fd=%d\n",clientfd);
-	}
+	// if(strcmp(ip,cfg.sync_ip) == 0){
+	// 	fd_list[fd_count].fd = clientfd;
+	// 	strcpy(fd_list[fd_count].ip, ip);
+	// 	fd_count++;
+	// 	// printf("save fd=%d\n",clientfd);
+	// }
 	if (clientfd < 0) {
 		printf("accept errno: %d --> %s\n", errno, strerror(errno));
 		return -1;
@@ -182,14 +183,13 @@ int send_cb(int fd) {
 		count = send(fd, conn_list[fd].wbuffer, conn_list[fd].wlength, 0);
 	}
 	
-	char msg[TXT_LENGTH] = {0};
-	memset(msg, 0, TXT_LENGTH);
+	char *msg = malloc(1024 * 1024 * 8);
+	memset(msg, 0, 1024 * 1024 * 8);
 
 	int i = 0;
 	for(i = 0; i < fd_count; i++){
-
 		int length = kvs_push_get(msg);
-
+		// printf("send_mes:%s\n",msg);
 		count = send(fd_list[i].fd, msg, length, 0);
 	}
 
@@ -197,6 +197,7 @@ int send_cb(int fd) {
 
 	//set_event(fd, EPOLLOUT, 0);
 	kvs_push_clear();
+	free(msg);
 	return count;
 }
 

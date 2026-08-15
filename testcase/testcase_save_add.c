@@ -24,6 +24,7 @@ const char *test_cmd[] = {
 	"SET","GET","EXIST","MOD","GET","DEL","EXIST","MOD","GET","EXIST"
 };
 
+char *test_key_last = "last_set";
 char *test_key = "Teacher";
 char *test_value = "King";
 char *test_value_mod = "Htj";
@@ -75,7 +76,7 @@ void testcase(int connfd){
 
 	size_t cap = 4096000; 
     size_t len = 0;
-    for(total_num = 0; total_num < 10; total_num ++){
+    for(total_num = 0; total_num < 100000; total_num ++){
 		
 		if(j == 10){
 			j = 0;
@@ -92,7 +93,7 @@ void testcase(int connfd){
 
 		// get cmd
         // strcpy(tmp,test_cmd[j]);
-		strcpy(tmp,"RSET");
+		strcpy(tmp,"SET");
         tmp[strcspn(tmp, "\n")] = '\0';
         int c_len = strlen(tmp);
 		memcpy(cmd_tmp, tmp, c_len);
@@ -108,13 +109,9 @@ void testcase(int connfd){
 		memset(tmp, 0, 4096);
 
 		// get key
-		
-        // strcpy(tmp, test_key);
+
 		sprintf(tmp, "%s%d", test_key, total_num);
 
-        // if(strcmp(tmp, "q\n") == 0) {
-        //     break;
-        // }
 		strcat(tcopy, tmp);
         
 		idx++;
@@ -199,16 +196,11 @@ void testcase(int connfd){
 		
 		
     }
-	// printf("strlen=%ld\n", strlen(send_mes));
+	printf("len=%ld\n", strlen(send_mes));
 
 	char *tmp = malloc(len + 32);
 	length = strlen(send_mes);
-	memcpy(tmp, send_mes, length);
-	memset(send_mes,0, length);
-	sprintf(send_mes, "%d\r\n",length);
-	strcat(send_mes, tmp);
-	length = strlen(send_mes);
-	// printf("send mes:%s\n",send_mes);
+	
 	send_msg(connfd, send_mes, length);
 }
 
@@ -216,8 +208,12 @@ void get_old_mes(int connfd){
 	FILE *fp = fopen("../sync.log", "r");
 
 	char mes[1024] = {0};
+	int i = 0;
 	while(fgets(mes, 128, fp)){
-		printf("%s",mes);
+		i++;
+		if(i != 0 && i % 10000 == 0){
+			printf("%s",mes);
+		}
 		memset(mes, 0, 1024);
 	}	
 
@@ -270,10 +266,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	
-		
 	fgetc(stdin);
-	// }else if(mode == 1){
-
 
 	return 0;
 	

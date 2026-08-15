@@ -56,7 +56,7 @@ struct fd_info {
 };
 extern struct fd_info *fd_list;
 
-
+char *kvs_protocol_combination(char *cmd, char *key, char *value);
 int check_fd_to_ip(int fd, char *ip);
 
 typedef struct son_conn{

@@ -189,7 +189,7 @@ int send_cb(int fd) {
 	int i = 0;
 	for(i = 0; i < fd_count; i++){
 		int length = kvs_push_get(msg);
-		// printf("send_mes:%s\n",msg);
+
 		count = send(fd_list[i].fd, msg, length, 0);
 	}
 

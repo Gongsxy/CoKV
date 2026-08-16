@@ -5,6 +5,7 @@ OBJ_DIR = build
 
 TARGET_ADD = testcase_save_add
 TARGET_FULL = testcase_save_full
+TARGET_SLAVE = testcase_save_slave
 TARGET_S = testcase_stdin
 
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
@@ -12,6 +13,7 @@ SOURCES = $(wildcard $(SRC_DIR)/*.c)
 $(JEM)
 SRC_ADD = testcase_save_add.c  mempool.c ../src/get_mes.c ../src/load_conf.c
 SRC_FULL = testcase_save_full.c  mempool.c ../src/get_mes.c ../src/load_conf.c
+SRC_SLAVE = testcase_save_slave.c  mempool.c ../src/get_mes.c ../src/load_conf.c
 JEM = testcase_stdin.c mempool.c 
 LDFLAGS = -L .
 LDLIBS = -ltestcase
@@ -21,6 +23,9 @@ add:
 full:
 	$(CC) -o $(TARGET_FULL) $(SRC_FULL)
 
+slave:
+	$(CC) -o $(TARGET_SLAVE) $(SRC_SLAVE)
+	
 stdin:
 	$(CC) -o $(TARGET_S) $(JEM) 
 # b:

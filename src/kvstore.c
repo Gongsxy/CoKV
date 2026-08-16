@@ -797,26 +797,42 @@ int kvs_is_complete(char *msg, int length){
 
 
 void sync_mes_init(void) {
-    if (sync_mes != NULL) return;  // 已经初始化过
+    if (sync_mes != NULL) return;  
     
-    sync_mes_cap = 1024 * 1024 * 8;
+    sync_mes_cap = 1024 * 1024 * 9;
     sync_mes = calloc(1, sync_mes_cap);
 }
 
-int packet_len = 0;
+
 int kvs_protocol(char *msg, int length, char *response){
+
     int key_len = 0;
     int value_len = 0;
     int push_flag = 0;
-
-    sync_mes_init();
+    int packet_len = 0;
 
     static int mes_len = 0;
+
     if (mes == NULL) {
-        mes = malloc(3072000);
+        mes = malloc(1024 * 1024 * 9);
         mes_len = 0;
     }
     
+    if(strncmp(msg, "+OK", 3) == 0) {
+
+        int i = 0, j = 0, in = 0;
+        while(msg[i]){
+            if(msg[i] == '*') {
+                msg[j] = msg[i];
+                in ++;
+                j++;
+            }
+            i++; 
+        }
+        msg[j] = '\0'; 
+        if(in == 0) return 0;
+    }
+
     if(cfg.full_save_flag == 1){
         if(strcmp(msg, "save\n") == 0){
             char *mes_array = malloc(3072000);
@@ -839,21 +855,15 @@ int kvs_protocol(char *msg, int length, char *response){
             free(mes_hash);
             free(mes_rbtree);
             free(mes_skip);
-            kvs_protocol_push(msg);
+            kvs_protocol_push(msg, strlen(msg));
             return 0;
         }
 
     }
-    
-    memset(response, 0, BUFFER_LENGTH);
-    memcpy(mes + mes_len,msg,length);
-    mes_len += length;
 
-    char *tokens[3] = {NULL, NULL, NULL};
-    int count = 0;
 
-    if(strcmp(msg, "SYNC\n") == 0){
-
+    if(length >= 5 && strncmp(msg, "SYNC\n", 5) == 0){
+        sync_mes_init();
         FILE *fp = NULL;
         if(cfg.add_save == 1){
             fp = fopen("add.txt", "r");
@@ -940,17 +950,33 @@ int kvs_protocol(char *msg, int length, char *response){
         }
         
         fclose(fp);
-        printf("SYNC:\n%s", sync_mes);
-        kvs_protocol_push(sync_mes);
+        kvs_protocol_push(sync_mes, sync_mes_len);
+        memset(sync_mes, 0, 1024 * 1024 * 9);
         sync_mes_len = 0;
-        sprintf(response, "$4\r\nDONE\r\n");
+        memset(mes, 0, 1024 * 1024 * 9);
+        mes_len = 0;
+        printf("DONE\r\n");
+        return 0;
     }
 
 
+    memset(response, 0, BUFFER_LENGTH);
+    memcpy(mes + mes_len,msg,length);
+
+    mes_len += length;
+
+    char *tokens[3] = {NULL, NULL, NULL};
+    int count = 0;
+
     int total_response_len = 0;
+
     while (mes_len > 0) {
+        
         int packet_len = kvs_is_complete(mes, mes_len);
-        if (packet_len == 0) break;  // 不够一条，等下次 recv
+
+        // printf("len:%d\n", packet_len);
+        if (packet_len == 0) break;  
+
 
         char single_cmd[4096] = {0};
         memcpy(single_cmd, mes, packet_len);
@@ -959,11 +985,11 @@ int kvs_protocol(char *msg, int length, char *response){
         char single_response[BUFFER_LENGTH] = {0};
         char *tokens[3] = {NULL, NULL, NULL};
 
-
+        // printf("single_cmd:%s\n", single_cmd);
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
-
         if(cfg.push_flag){
-            kvs_protocol_push(single_cmd);
+            kvs_protocol_push(single_cmd, count);
+
         }
 
 
@@ -977,8 +1003,9 @@ int kvs_protocol(char *msg, int length, char *response){
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
+    if(mes_len == 0) memset(mes, 0, 1024 * 1024 * 9);
 
-    printf("len:%d\n", total_response_len);
+    // printf("len:%d\n", total_response_len);
     return total_response_len; 
     
     // return count;
@@ -1032,111 +1059,6 @@ kvs_skiplist_destroy(globle_skiplist);
 m_free(globle_skiplist);
 #endif
 }
-
-
-// char *kvs_protocol_combination(char *cmd, char *key, char *value){
-
-// 	int total_num = 0;
-// 	char *send_mes = malloc(4096000);
-// 	// char *send_mes = malloc(4096);
-
-// 	size_t cap = 4096000; 
-//     size_t len = 0;
-		
-		
-// 		// printf("total_num: %d\n",total_num);
-// 		char msg[4096] = {0};
-//         char *tmp = malloc(4096000);
-// 		char tcopy[4096] = {0};
-
-
-// 		char cmd_tmp[128] = {0};
-// 		int exit_status = 0;
-// 		int idx = 0;
-
-// 		// get cmd
-
-// 		strcpy(tmp,cmd);
-//         tmp[strcspn(tmp, "\n")] = '\0';
-//         int c_len = strlen(tmp);
-
-// 		sprintf(msg, "$%d\r\n%s\r\n",c_len, tmp);
-// 		// printf("cmd:%s\n",cmd);
-
-// 		msg[strlen(cmd)] = '\0';
-// 		// length += strlen(cmd);
-// 		idx++;
-// 		memset(tmp, 0, 4096000);
-
-// 		// get key
-
-// 		memcpy(tmp, key, strlen(key));
-
-// 		strcat(tcopy, tmp);
-        
-// 		idx++;
-//         int k_len = strlen(tcopy);
-
-// 		if(k_len == -1){
-// 			snprintf(msg + c_len, k_len, "$%d\r\n\r\n",k_len);
-// 		}else if(k_len == 0){
-// 			snprintf(msg + c_len, k_len, "$%d\r\n",k_len);
-// 		}else{
-// 			sprintf(msg + c_len, "$%d\r\n%s\r\n",k_len, tcopy);
-// 		}
-
-// 		memset(tcopy, 0, 4096);
-		
-// 		// match cmd that need value
-//         int i = 0;
-//         int match = 0;
-//         for(i = 0; i < 8; i ++){
-			
-//             if(strcmp(cmd_tmp, key_value_command[i]) == 0){
-//                 match = 1;
-//                 break;
-//             }
-//         } 
-		
-//         if(match){
-				
-// 			strcat(tcopy, value);
-
-// 			idx++;
-//             int v_len = strlen(tcopy);
-
-// 			if(v_len == -1){
-// 				snprintf(msg + c_len + k_len, v_len, "$%d\r\n\r\n",v_len);
-// 			}else if(v_len == 0){
-// 				snprintf(msg + c_len + k_len, v_len, "$%d\r\n",v_len);
-// 			}else{
-// 				sprintf(msg + c_len + k_len, "$%d\r\n%s\r\n",v_len, tcopy);
-// 			}
-// 			// length += strlen(value);
-// 			memset(tcopy, 0, 4096);
-//         }
-		
-
-// 		char final_send_mes[4096] = {0};
-		
-// 		// send request
-
-// 		sprintf(final_send_mes, "*%d\r\n", idx);
-// 		strcat(final_send_mes, msg);
-
-// 		size_t need = strlen(final_send_mes);
-// 		if (len + need + 1 > cap) {
-//             cap = cap * 2 + need;     
-//             send_mes = realloc(send_mes, cap);
-//         }
-// 		// strcat(send_mes, final_send_mes);
-// 		memcpy(send_mes + len, final_send_mes, need); 
-//         len += need;
-		
-    
-// 	printf("conbine send_mes:%s\n", send_mes);
-//     return send_mes;
-// }
 
 
 int origin_size = 0;

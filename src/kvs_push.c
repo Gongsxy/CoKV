@@ -2,20 +2,26 @@
 #include "kvstore.h"
 
 static char *global_push_msg = NULL;
-
-int kvs_protocol_push(char *msg){
+static int global_push_msg_len = 0;
+int kvs_protocol_push(char *msg, int length){
     kvs_push_init();
+    // memset(global_push_msg, 0, 3072000);
     strcat(global_push_msg,msg);
-    int length = strlen(global_push_msg);
-    // printf("push:%s\n", global_push_msg);
-    return length;
+    int len = strlen(global_push_msg);
+
+    return len;
 }
 
 int kvs_push_get(char *msg){
-    // printf("glo:%s\n",global_push_msg);
+
     if(msg == NULL || global_push_msg == NULL) return -1;
     memcpy(msg, global_push_msg, 1024 * 1024 * 8);
     return strlen(msg);
+
+    // int copy_len = global_push_msg_len;
+    
+    // memcpy(msg, global_push_msg, copy_len);
+    // return copy_len; 
 }
 
 void kvs_push_clear(){

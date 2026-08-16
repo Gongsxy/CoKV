@@ -65,7 +65,7 @@ typedef struct son_conn{
 // connection son;
 
 int kvs_protocol(char *msg, int length, char *response);
-int kvs_protocol_push(char *msg);
+int kvs_protocol_push(char *msg, int length);
 int kvs_push_get(char *msg);
 void kvs_push_clear();
 void kvs_push_destroy();

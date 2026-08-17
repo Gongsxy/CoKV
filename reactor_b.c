@@ -11,9 +11,9 @@
 
 
 
-#include "server.h"
-#include "kvstore.h"
-#include "load_conf.h"
+#include "src/server.h"
+#include "src/kvstore.h"
+#include "src/load_conf.h"
 
 #define CONNECTION_SIZE			1024 // 1024 * 1024
 
@@ -102,20 +102,7 @@ int accept_cb(int fd) {
 	//printf("accept finshed: %d\n", clientfd);
 	char ip[128] = {0};
 	memset(ip, 0, sizeof(ip));
-	// check_fd_to_ip(clientfd, ip);
-	// if(strcmp(ip,cfg.sync_ip) == 0){
-	// 	fd_list[fd_count].fd = clientfd;
-	// 	strcpy(fd_list[fd_count].ip, ip);
-	// 	fd_count++;
-		
-	// 	// printf("save fd=%d\n",clientfd);
-	// }
-	// if(strcmp(ip,cfg.sync_ip) == 0){
-	// 	fd_list[fd_count].fd = clientfd;
-	// 	strcpy(fd_list[fd_count].ip, ip);
-	// 	fd_count++;
-	// 	// printf("save fd=%d\n",clientfd);
-	// }
+
 	if (clientfd < 0) {
 		printf("accept errno: %d --> %s\n", errno, strerror(errno));
 		return -1;
@@ -173,6 +160,7 @@ int recv_cb(int fd) {
 }
 
 
+int j = 0;
 int send_cb(int fd) {
 
 	int count = 0;
@@ -196,6 +184,7 @@ int send_cb(int fd) {
 
 	//set_event(fd, EPOLLOUT, 0);
 	kvs_push_clear();
+	 
 	return count;
 }
 
@@ -264,6 +253,7 @@ int reactor_start(unsigned short port, msg_handle hand) {
 		set_event(sockfd, EPOLLIN, 1);
 	}
 
+
 	if (cfg.is_slave == 1) {
         int master_fd = socket(AF_INET, SOCK_STREAM, 0);
         struct sockaddr_in addr = {0};
@@ -271,21 +261,20 @@ int reactor_start(unsigned short port, msg_handle hand) {
         addr.sin_port = htons(cfg.port);
         inet_pton(AF_INET, cfg.ip, &addr.sin_addr);
 
-        if (connect(master_fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
-            printf("Connected to master %s:%d\n", cfg.ip, cfg.port);
-            
-            // 注册到 epoll，监听可读（收主服务端发来的数据）
+        if (connect(master_fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {    
+
             event_register(master_fd, EPOLLIN);
-            conn_list[master_fd].r_action.recv_callback = recv_cb;  // 和客户端一样处理
+            conn_list[master_fd].r_action.recv_callback = recv_cb;  
             
-            // 发 SYNC 命令要全量数据
-            // char sync_cmd[] = "*1\r\n$4\r\nSYNC\r\n";
-            // send(master_fd, sync_cmd, strlen(sync_cmd), 0);
+			send(master_fd, "SYNC\n", 5, 0);
+
+
         } else {
             printf("Connect to master failed: %s\n", strerror(errno));
             close(master_fd);
         }
     }
+
 
 	gettimeofday(&begin, NULL);
 

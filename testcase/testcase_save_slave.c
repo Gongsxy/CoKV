@@ -77,7 +77,7 @@ void testcase(int connfd){
 	size_t cap = 4096000; 
     size_t len = 0;
 
-		for(total_num = 0; total_num < 20; total_num ++){
+		for(total_num = 0; total_num < 100000; total_num ++){
 
 			if(j == 10){
 				j = 0;
@@ -194,7 +194,7 @@ void testcase(int connfd){
 
 			j++;
 			
-			if(total_num == 9){
+			if(total_num == 49999){
 				// printf("len=%ld\n", strlen(send_mes));
 
 				char *tmp = malloc(len + 32);

@@ -105,8 +105,15 @@ int accept_cb(int fd) {
 	check_fd_to_ip(clientfd, ip);
 
 	if(strcmp(ip,cfg.sync_ip) == 0){
+		int i = 0;
+		while(i < fd_count){
+			if(strcmp(fd_list[i].ip, ip) == 0){
+				return 0;
+			}
+		}
 		fd_list[fd_count].fd = clientfd;
 		strcpy(fd_list[fd_count].ip, ip);
+
 		fd_count++;
 		
 		// printf("save fd=%d\n",clientfd);
@@ -144,11 +151,11 @@ int accept_cb(int fd) {
 int recv_cb(int fd) {
 	memset(conn_list[fd].rbuffer, 0, BUFFER_LENGTH );
 	int count = recv(fd, conn_list[fd].rbuffer, BUFFER_LENGTH - 1, 0);
-	if (count == 0) { // disconnect
-		// printf("client disconnect: %d\n", fd);
+	if (count == 0) { 
+
 		close(fd);
 
-		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL); // unfinished
+		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL); 
 
 		return 0;
 	} else if (count < 0) { // 
@@ -177,10 +184,10 @@ int recv_cb(int fd) {
 int send_cb(int fd) {
 
 	int count = 0;
-
 	if (conn_list[fd].wlength != 0 ) {
 		
 		count = send(fd, conn_list[fd].wbuffer, conn_list[fd].wlength, 0);
+
 	}
 	
 	char *msg = malloc(1024 * 1024 * 8);
@@ -189,13 +196,18 @@ int send_cb(int fd) {
 	int i = 0;
 	for(i = 0; i < fd_count; i++){
 		int length = kvs_push_get(msg);
-
+		if(length == 0) {
+			return 0;
+		}
 		count = send(fd_list[i].fd, msg, length, 0);
+		set_event(fd_list[i].fd, EPOLLIN, 0);
+
+        
+        kvs_push_clear();
 	}
 
 	set_event(fd, EPOLLIN, 0);
 
-	//set_event(fd, EPOLLOUT, 0);
 	kvs_push_clear();
 	free(msg);
 	return count;

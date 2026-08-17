@@ -533,8 +533,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
     char tmp[32] = {0};
     int resp_len = 0;
     while(i < length){
-        //  && tcopy[i] != '\0'
-        // tcopy[i] < length
+
         int move_flag = 1;
         switch(status){
             case CMD:{//OK
@@ -675,8 +674,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                 break;
             }
             case VALUE:{
-// printf("status=%d i=%d char=%c\n",
-//        status,i,tcopy[i]);
+
                 int len = 0;
                 if(tcopy[i] == '$') {
                     len = 1;
@@ -755,7 +753,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
     }
 
-    return resp_len;
+    return i;
 }
 
 
@@ -814,11 +812,11 @@ int kvs_protocol(char *msg, int length, char *response){
     static int mes_len = 0;
 
     if (mes == NULL) {
-        mes = malloc(1024 * 1024 * 9);
+        mes = calloc(1, 1024 * 1024 * 9);
         mes_len = 0;
     }
     
-    if(strncmp(msg, "+OK", 3) == 0) {
+    if(strncmp(msg, "+", 1) == 0) {
 
         int i = 0, j = 0, in = 0;
         while(msg[i]){
@@ -862,7 +860,8 @@ int kvs_protocol(char *msg, int length, char *response){
     }
 
 
-    if(length >= 5 && strncmp(msg, "SYNC\n", 5) == 0){
+    if(strncmp(msg, "SYNC\n", 5) == 0){
+        mes_len = 0;
         sync_mes_init();
         FILE *fp = NULL;
         if(cfg.add_save == 1){
@@ -872,7 +871,7 @@ int kvs_protocol(char *msg, int length, char *response){
         }
 
         if (!fp) {
-            sprintf(response, "$4\r\nDONE\r\n");
+            printf( "$4\r\nERROR\r\n");
             return 0;
         }
         
@@ -916,7 +915,7 @@ int kvs_protocol(char *msg, int length, char *response){
             if(i = 10){
                 if (has_value == 1) {
                     char resp[4096];
-                    int n = snprintf(resp, sizeof(resp),"*3\r\n$3\r\n%s\r\n$%ld\r\n%s\r\n$%ld\r\n%s\r\n",cmd, strlen(key), key, strlen(value), value);
+                    int n = snprintf(resp, 4096,"*3\r\n$3\r\n%s\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",cmd,key_len, key, value_len, value);
                     resp[n] = '\0';
                     // printf("push_msg:%s\n", resp);
                     // kvs_protocol_push(resp);
@@ -953,7 +952,7 @@ int kvs_protocol(char *msg, int length, char *response){
         kvs_protocol_push(sync_mes, sync_mes_len);
         memset(sync_mes, 0, 1024 * 1024 * 9);
         sync_mes_len = 0;
-        memset(mes, 0, 1024 * 1024 * 9);
+        // memset(mes, 0, 1024 * 1024 * 9);
         mes_len = 0;
         printf("DONE\r\n");
         return 0;
@@ -971,13 +970,11 @@ int kvs_protocol(char *msg, int length, char *response){
     int total_response_len = 0;
 
     while (mes_len > 0) {
-        
+
         int packet_len = kvs_is_complete(mes, mes_len);
-
-        // printf("len:%d\n", packet_len);
-        if (packet_len == 0) break;  
-
-
+        
+        // if (packet_len == 0) break;  
+        if (packet_len == 0) break; 
         char single_cmd[4096] = {0};
         memcpy(single_cmd, mes, packet_len);
         single_cmd[packet_len] = '\0';
@@ -989,7 +986,6 @@ int kvs_protocol(char *msg, int length, char *response){
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
         if(cfg.push_flag){
             kvs_protocol_push(single_cmd, count);
-
         }
 
 
@@ -1005,7 +1001,6 @@ int kvs_protocol(char *msg, int length, char *response){
     }
     if(mes_len == 0) memset(mes, 0, 1024 * 1024 * 9);
 
-    // printf("len:%d\n", total_response_len);
     return total_response_len; 
     
     // return count;

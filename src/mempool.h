@@ -20,21 +20,26 @@
     item->next = item->prev = NULL;     \
 }while(0);
 
-typedef struct mem_block {
-    int id;
-    struct mem_block *next;
-    struct mem_block *prev;
-}M_block;
+
+// typedef struct mem_chunk {
+
+//     void *memory;
+
+//     struct mem_chunk *next;
+
+// }M_chunk;
+
+// typedef struct mem_block {
+//     int id;
+//     struct mem_block *next;
+//     struct mem_block *prev;
+// }M_block;
 
 typedef struct mem_pool {
-    int block_size;
-    int block_num;
-    void *memory;
-    M_block *free_list;
+    size_t size;       
+    size_t offset;
+    char *memory;
 }Mempool;
 
 #define PAGE_SIZE  2048
 #define BLOCK_NUM   6
-
-void *m_malloc(int size);
-void m_free(void *ptr);

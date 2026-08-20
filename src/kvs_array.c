@@ -6,6 +6,7 @@
 
 int kvs_array_create(kvs_array_t *inst){
     if(!inst) return -1;
+    memset(inst, 0, sizeof(kvs_array_t));
     if(inst->table){
         return 1;
     }
@@ -13,6 +14,7 @@ int kvs_array_create(kvs_array_t *inst){
     if(!inst->table) return -2;
 
     inst->total = 0;
+    return 0;
 };
 
 int kvs_array_destory(kvs_array_t *inst){
@@ -20,6 +22,7 @@ int kvs_array_destory(kvs_array_t *inst){
     if(inst->table){
         kvs_free(inst->table);
     }
+    return 0;
 };
 
 char * kvs_array_get(kvs_array_t *inst, char *key){
@@ -34,30 +37,35 @@ char * kvs_array_get(kvs_array_t *inst, char *key){
             return inst->table[i].value;
         }
     }
-    return 0;
+    return NULL;
 };
 
 int kvs_array_set(kvs_array_t *inst, char *key, char *value){
     if(inst == NULL || key == NULL || value == NULL) return -1;
+    
     if(kvs_array_get(inst,key)){
         return 1;
     }
-    if(inst->idx == KVS_ARRAY_SIZE) return -1;
+    if(inst->total == KVS_ARRAY_SIZE) return -1;
 
     char *kcopy = kvs_malloc(strlen(key) + 1);
     memset(kcopy,0,strlen(key) + 1);
-    strncpy(kcopy,key,strlen(key) + 1);
+    strcpy(kcopy,key);
 
     char *kvalue = kvs_malloc(strlen(value) + 1);
     memset(kvalue,0,strlen(value) + 1);
-    strncpy(kvalue,value,strlen(value) + 1);
+    strcpy(kvalue,value);
 
     int i = 0;
     for(i = 0; i < inst->total; i ++){
         if(inst->table[i].key == NULL){
             inst->table[i].key = kcopy;
             inst->table[i].value = kvalue;
-            inst->total ++;
+            // inst->total ++;
+
+            inst->table[i].key = kcopy;
+            inst->table[i].value = kvalue;
+            inst->total++;  
             return 0;
         }
     }
@@ -104,7 +112,7 @@ int kvs_array_mod(kvs_array_t *inst, char *key, char *value){
 
             char *kvalue = kvs_malloc(strlen(value) + 1);
             memset(kvalue,0,strlen(value) + 1);
-            strncpy(kvalue,value,strlen(value));
+            strcpy(kvalue,value);
             inst->table[i].value = kvalue;
 
             return 0;

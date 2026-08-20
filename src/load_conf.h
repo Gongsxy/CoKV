@@ -4,6 +4,10 @@
 typedef struct {
     char ip[64];
     int port;
+    int show_response;
+    int use_mempool;
+
+    // app
     int mode;
     int full_save;
     int add_save;
@@ -11,7 +15,7 @@ typedef struct {
     int get_old_mes_flag;
     int load_old_mes;
     int push_flag;
-
+    int push_save_flag;
     // sync
     char sync_ip[10];
     int is_slave;

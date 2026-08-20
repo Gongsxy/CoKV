@@ -127,6 +127,7 @@ int is_number(char *msg){//1 true 0 false
 
 // #define ADDSTORAGE      add_save_flag
 
+// ok
 int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
     if(tokens == NULL || response == NULL) return -1;
     
@@ -152,10 +153,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 kvs_txt_write(cmd, key, value, key_len, value_len);
             }
             if(ret < 0){
-                length = sprintf(response,"-ERR %s\r\n", "unknown command");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
             }else{  
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("EXIST\r\n");
             }
             break;
@@ -168,10 +169,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #endif 
             char *result = kvs_array_get(globle_array,key);
             if(result == NULL){
-                length = sprintf(response,"$-1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
                 // printf("NOT EXIST\r\n");
             }else{        
-                length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
                 // printf("%s\r\n",result);
             }
             break;
@@ -183,13 +184,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -202,13 +203,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,"-ERR no such key\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -218,10 +219,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("EXIST\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -237,10 +238,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #endif
 
             if(ret < 0){
-                length = sprintf(response,"-ERR %s\r\n", "unknown command");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
             }else{
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("EXIST\r\n");
             }
             break;
@@ -256,10 +257,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             free(value);
 #endif
             if(result == NULL){
-                length = sprintf(response,"$-1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
                 // printf("NOT EXIST\r\n");
             }else{
-                length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
                 // printf("%s\r\n",result);
             }
             break;
@@ -271,13 +272,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -289,13 +290,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #endif
             ret = kvs_rbtree_mod(globle_rbtree,key,value);
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,"-ERR no such key\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -304,10 +305,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             ret = kvs_rbtree_exist(globle_rbtree,key);
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("EXIST\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -321,10 +322,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR %s\r\n", "unknown command");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
             }else{
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("EXIST\r\n");/
             }
             break;
@@ -340,10 +341,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             free(value);
 #endif
             if(result == NULL){
-                length = sprintf(response,"$-1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
                 // printf("NOT EXIST\r\n");
             }else{
-                length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
                 // printf("%s\r\n",result);
             }
             break;
@@ -355,13 +356,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -373,13 +374,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,"-ERR no such key\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -388,10 +389,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             ret = kvs_hash_exist(globle_hash,key);
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("EXIST\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -405,10 +406,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_write(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR %s\r\n", "unknown command");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
             }else{
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("EXIST\r\n");
             }
             break;
@@ -425,10 +426,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             free(value);
 #endif  
             if(result == NULL){
-                length = sprintf(response,"$-1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
                 // printf("NOT EXIST\r\n");
             }else{          
-                length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
                 // printf("%s\r\n",result);
             }
             break;
@@ -441,13 +442,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -460,13 +461,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,"-ERR no such key\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -477,10 +478,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             if(cfg.add_save == 1) kvs_txt_exist(cmd, key, key_len);
 
             if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
                 // printf("EXIST\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
 
@@ -488,11 +489,11 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
 #endif
         case KVS_CMD_PING:{
-            length = sprintf(response,"+PONG\r\n");
+            if(cfg.show_response == 1) length = sprintf(response,"+PONG\r\n");
             break;
         }
         case KVS_CMD_QUIT:{
-            length = sprintf(response,"+OK\r\n");
+            if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
             break;
         }
         case KVS_CMD_SYNC:{
@@ -504,7 +505,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         default:{
-            length = sprintf(response,"-ERR unknown command '%s'\r\n", tokens[0]);
+            if(cfg.show_response == 1) length = sprintf(response,"-ERR unknown command '%s'\r\n", tokens[0]);
             break;
         }
     }
@@ -513,6 +514,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
     return length;
 };
 
+
+// ok
 static int sync_flag = 0;
 int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *push_flag){
     
@@ -599,13 +602,18 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
                             return 0;
                         }
-                        tokens[0] = m_malloc(cmd_len + 1);
-                        memcpy(tokens[0], &tcopy[i], cmd_len);
-                        if (tokens[0]) {
-                            for(int k = 0; tokens[0][k]; k++) {
-                                tokens[0][k] = toupper(tokens[0][k]);
-                            }
+                        // mempool
+                        if(cfg.use_mempool == 1){
+                            tokens[0] = m_malloc(cmd_len + 1);
+                        }else{
+                            tokens[0] = malloc(cmd_len + 1);
                         }
+                        memcpy(tokens[0], &tcopy[i], cmd_len);
+                        // if (tokens[0]) {
+                        //     for(int k = 0; tokens[0][k]; k++) {
+                        //         tokens[0][k] = toupper(tokens[0][k]);
+                        //     }
+                        // }
                         tokens[0][cmd_len] = '\0';
                         // printf("cmd:%s\n",tokens[0]);
                         i = i + cmd_len;
@@ -647,9 +655,16 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     i += 2;
                     *key_len = atoi(tmp);
                     if(i + *key_len > length){
-                        return 0; // 数据不完整
+                        return 0; 
                     }
-                    tokens[1] = m_malloc(*key_len + 1);
+
+                    // mempoll
+                    if(cfg.use_mempool == 1){
+                        tokens[1] = m_malloc(*key_len + 1);
+                    }else{
+                        tokens[1] = malloc(*key_len + 1);
+                    }
+
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
                     // printf("key:%s\n",tokens[1]);
@@ -702,7 +717,14 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         // save_i=i;
                         return 0;
                     }
-                    tokens[2] = m_malloc(*value_len + 1);
+
+                    // mempool
+                    if(cfg.use_mempool == 1){
+                        tokens[2] = m_malloc(*value_len + 1);
+                    }else{
+                        tokens[2] = malloc(*value_len + 1);
+                    }
+
                     memcpy(tokens[2], &tcopy[i], *value_len );
                     tokens[2][*value_len] = '\0';
                     // printf("value:%s\n",tokens[2]);
@@ -724,15 +746,21 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
         
         if(single_num > 0 && finish_single == single_num){
             // printf("enter\n");
-            for(int k = 0; tokens[0][k]; k++){
-                tokens[0][k] = toupper(tokens[0][k]);
-            }
+            // for(int k = 0; tokens[0][k]; k++){
+            //     tokens[0][k] = toupper(tokens[0][k]);
+            // }
 
             int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len, push_flag);
             resp_len += len;
-            if(tokens[0]) m_free(tokens[0]);
-            if(tokens[1]) m_free(tokens[1]);
-            if(tokens[2]) m_free(tokens[2]);
+
+            // mempool
+            if(cfg.use_mempool == 1){
+                m_reset();
+            }else{
+                if(tokens[0]) free(tokens[0]);
+                if(tokens[1]) free(tokens[1]);
+                if(tokens[2]) free(tokens[2]);
+            }
             tokens[0] = NULL;
             tokens[1] = NULL;
             tokens[2] = NULL;
@@ -757,7 +785,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 }
 
 
-
+// ok
 int kvs_is_complete(char *msg, int length){
 
     if (length < 4 || msg[0] != '*') return 0;
@@ -793,15 +821,20 @@ int kvs_is_complete(char *msg, int length){
 }
 
 
-
+// ok
 void sync_mes_init(void) {
     if (sync_mes != NULL) return;  
     
-    sync_mes_cap = 1024 * 1024 * 9;
-    sync_mes = calloc(1, sync_mes_cap);
+    sync_mes_cap = 1024 * 1024 * 5;
+    if(cfg.use_mempool == 1){
+        sync_mes = m_malloc(sync_mes_cap);
+    }else {
+        sync_mes = calloc(1, sync_mes_cap);
+    }
 }
 
 
+// ok
 int kvs_protocol(char *msg, int length, char *response){
 
     int key_len = 0;
@@ -812,7 +845,13 @@ int kvs_protocol(char *msg, int length, char *response){
     static int mes_len = 0;
 
     if (mes == NULL) {
-        mes = calloc(1, 1024 * 1024 * 9);
+        if(cfg.use_mempool == 1){
+            mes = m_malloc(1024 * 1024 * 7);
+            if(mes) memset(mes, 0, 1024 * 1024 * 7);
+        }else {
+            mes = calloc(1, 1024 * 1024 * 7);
+        }
+        // mes = calloc(1, 1024 * 1024 * 5);
         mes_len = 0;
     }
     
@@ -833,27 +872,44 @@ int kvs_protocol(char *msg, int length, char *response){
 
     if(cfg.full_save_flag == 1){
         if(strcmp(msg, "save\n") == 0){
-            char *mes_array = malloc(3072000);
-            kvs_array_save(globle_array, mes_array);
-            char *mes_skip = malloc(3072000);
-            kvs_skiplist_save(globle_skiplist, mes_skip);
-            char *mes_rbtree = malloc(3072000);
-            kvs_rbtree_save(globle_rbtree, mes_rbtree);
-            char *mes_hash = malloc(3072000);
-            kvs_hash_save(globle_hash, mes_hash);
+
+            char *tmp = NULL;
+            if(cfg.use_mempool == 1){
+                tmp = m_malloc(1024 * 1024 * 5);
+                if(tmp) memset(tmp, 0, 1024 * 1024 * 5);
+            }else {
+                tmp = calloc(1, 1024 * 1024 * 5);
+            }
+            
             FILE *fp_full = fopen("full.txt", "a+");
-            fputs(mes_array, fp_full);
-            fputs(mes_skip, fp_full);
-            fputs(mes_rbtree, fp_full);
-            fputs(mes_hash, fp_full);
+
+            kvs_array_save(globle_array, tmp);
+            fputs(tmp, fp_full);
             fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 5);
+
+            kvs_skiplist_save(globle_skiplist, tmp);
+            fputs(tmp, fp_full);
+            fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 5);
+
+            int rbtree_length = kvs_rbtree_save(globle_rbtree, tmp);
+            fputs(tmp, fp_full);
+            fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 5);
+
+            int hash_length = kvs_hash_save(globle_hash, tmp);
+            fputs(tmp, fp_full);
+            fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 5);
+
+
             fclose(fp_full);
 
-            free(mes_array);
-            free(mes_hash);
-            free(mes_rbtree);
-            free(mes_skip);
             kvs_protocol_push(msg, strlen(msg));
+            if(cfg.use_mempool == 1){
+                m_reset();
+            }
             return 0;
         }
 
@@ -999,63 +1055,72 @@ int kvs_protocol(char *msg, int length, char *response){
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
-    if(mes_len == 0) memset(mes, 0, 1024 * 1024 * 9);
+    if(mes_len == 0) memset(mes, 0, 1024 * 1024 * 7);
 
     return total_response_len; 
     
     // return count;
 }
 
+
+// mempool
 int init_kvs(void){
 #if ENABLE_ARRAY
     // memset(globle_array,0,sizeof(kvs_array_t));
-    globle_array = m_malloc(sizeof(kvs_array_t));
+    globle_array = malloc(sizeof(kvs_array_t));
     kvs_array_create(globle_array);
 #endif
 
 #if ENABLE_RBTREE
     // memset(globle_rbtree,0,sizeof(kvs_rbtree_t));
-    globle_rbtree = m_malloc(sizeof(kvs_rbtree_t));
+    globle_rbtree = malloc(sizeof(kvs_rbtree_t));
     kvs_rbtree_create(globle_rbtree);
 #endif
 
 #if ENABLE_HASH
     // memset(globle_hash,0,sizeof(kvs_hash_t));
-    globle_hash = m_malloc(sizeof(kvs_hash_t));
+    globle_hash = malloc(sizeof(kvs_hash_t));
     kvs_hash_create(globle_hash);
 #endif
 
 #if ENABLE_SKIPTABLE
     // memset(globle_skiplist, 0, sizeof(kvs_skiplist_t));
-    globle_skiplist = m_malloc(sizeof(kvs_skiplist_t));
+    globle_skiplist = malloc(sizeof(kvs_skiplist_t));
     kvs_skiplist_create(globle_skiplist);
 #endif
     return 0;
 }
 
+
+// mempool
 void dest_kvs(void){
 #if ENABLE_ARRAY
+free(globle_array);
 kvs_array_destory(globle_array);
-m_free(globle_array);
+
 #endif
 
 #if ENABLE_RBTREE
+free(globle_rbtree);
 kvs_rbtree_destory(globle_rbtree);
-m_free(globle_rbtree);
+
 #endif
 
 #if ENABLE_HASH
+free(globle_hash);
 kvs_hash_destory(globle_hash);
-m_free(globle_hash);
+
 #endif
 
 #if ENABLE_SKIPTABLE
+free(globle_skiplist);
 kvs_skiplist_destroy(globle_skiplist);
-m_free(globle_skiplist);
+
 #endif
 }
 
 
+// ok
 int origin_size = 0;
 static char *old_mes = NULL;
 int save_old_mes(char *cmd, char *key, char *value){
@@ -1083,6 +1148,7 @@ int save_old_mes(char *cmd, char *key, char *value){
     return 0;
 }
 
+// ok
 int write_old_mes(void){
     if(old_mes == NULL) return 0;
     FILE *fp = fopen("sync.log", "w");
@@ -1095,6 +1161,7 @@ int write_old_mes(void){
     return 0;
 }
 
+// ok
 void kvs_txt_load(char *cmd, char *key, char *value){
     printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
 #if ENABLE_ARRAY
@@ -1153,6 +1220,7 @@ void kvs_txt_load(char *cmd, char *key, char *value){
     // send_old_mes(cmd, key, value);
 }
 
+// ok
 // read requesies in a.txt
 void kvs_add_read(char *cmd, char *key, char *value){
     FILE *fp = fopen("add.txt", "r");
@@ -1273,6 +1341,7 @@ void kvs_add_read(char *cmd, char *key, char *value){
     fclose(fp);
 }
 
+// ok
 void kvs_full_read(char *cmd, char *key, char *value){
 
     FILE *fp = fopen("full.txt", "r");
@@ -1391,7 +1460,6 @@ void kvs_full_read(char *cmd, char *key, char *value){
         status = KEY;
     }
 
-///////////////-
     fclose(fp);
 }
 
@@ -1414,6 +1482,7 @@ int main(int argc, char const *argv[])
         if(cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
         }
+        
         reactor_start(cfg.port,kvs_protocol);
     }else if(cfg.mode == 2){
         
@@ -1424,5 +1493,6 @@ int main(int argc, char const *argv[])
     }
     dest_kvs();
     kvs_push_destroy();
+    mpool_destroy();
     return 0;
 }

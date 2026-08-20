@@ -1,16 +1,45 @@
 CC = gcc
 
 SRC_DIR = src
+SRC_SLAVE = slave
 OBJ_DIR = build
 BIN = kvstore 
 OUTPUT_DIR = ./build
 
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
+SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
 OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 TARGET = kvstore
+
+TARGET_ADD = testcase_save_add
+TARGET_FULL = testcase_save_full
+TARGET_SLAVE = testcase_save_slave
+TARGET_S = testcase_stdin
+TARGET_SERVER_SLAVE = kvstore_slave
+
+SRC_ADD = ./testcase/testcase_save_add.c  src/mempool.c src/get_mes.c src/load_conf.c
+SRC_FULL = ./testcase/testcase_save_full.c  src/mempool.c src/get_mes.c src/load_conf.c
+SRC_T_SLAVE = ./testcase/testcase_save_slave.c  src/mempool.c src/get_mes.c src/load_conf.c
+JEM = ./testcase/testcase_stdin.c src/mempool.c
+# SRC_SERVER_SLAVE = slave/
+
 all:
 	$(CC) -g -I$(SRC_DIR) -o $(TARGET) $(SOURCES) -luring
 
+testcase_add:
+	$(CC) -o $(TARGET_ADD) $(SRC_ADD)
+
+testcase_full:
+	$(CC) -o $(TARGET_FULL) $(SRC_FULL)
+
+testcase_slave:
+	$(CC) -o $(TARGET_SLAVE) $(SRC_T_SLAVE)
+	
+# testcase_stdin:
+# 	$(CC) -o $(TARGET_S) $(JEM) 
+
+server_slave:
+	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_SLAVE) -luring
 # TARGET = kvstore
 # -mcmodel=medium
 # $(JEM)
@@ -21,4 +50,4 @@ all:
 # # b:
 # # 	$(CC) -o $(TARGET_B) $(SRC_B) 
 clean:
-	rm -rf $(TARGET)
+	rm -rf $(TARGET) $(TARGET_ADD) $(TARGET_FULL) $(TARGET_SLAVE) $(TARGET_S)

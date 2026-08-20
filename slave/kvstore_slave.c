@@ -1,8 +1,9 @@
 
 
-#include "../src/kvstore.h"
-#include "../src/server.h"
-#include "../src/load_conf.h"
+#include "kvstore.h"
+#include "server.h"
+#include "load_conf.h"
+
 
 #if 1
 kvs_array_t *globle_array = NULL;
@@ -102,6 +103,12 @@ void kvs_free(void *ptr){
 };
 #endif
 
+static char *mes = NULL;
+static char *sync_mes = NULL;
+static int   sync_mes_cap = 0;
+static int   sync_mes_len = 0;
+
+
 int is_number(char *msg){//1 true 0 false 
 	if(msg == NULL) return 0;
 	int i = 0;
@@ -145,10 +152,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 kvs_txt_write(cmd, key, value, key_len, value_len);
             }
             if(ret < 0){
-                length = sprintf(response,"-ERR %s\r\n", "unknown command");
+                // length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
             }else{  
-                length = sprintf(response,"+OK\r\n");
+                // length = sprintf(response,"+OK\r\n");
                 // printf("EXIST\r\n");
             }
             break;
@@ -161,10 +168,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #endif 
             char *result = kvs_array_get(globle_array,key);
             if(result == NULL){
-                length = sprintf(response,"$-1\r\n");
+                // length = sprintf(response,"$-1\r\n");
                 // printf("NOT EXIST\r\n");
             }else{        
-                length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                // length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
                 // printf("%s\r\n",result);
             }
             break;
@@ -176,13 +183,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             kvs_txt_del(cmd, key, key_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                // length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                // length = sprintf(response,":1\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                // length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -195,13 +202,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 kvs_txt_mod(cmd, key, value, key_len, value_len);
 #endif
             if(ret < 0){
-                length = sprintf(response,"-ERR internal error\r\n");
+                // length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
             }else if(ret == 0){
-                length = sprintf(response,"+OK\r\n");
+                // length = sprintf(response,"+OK\r\n");
                 // printf("OK\r\n");
             }else{
-                length = sprintf(response,"-ERR no such key\r\n");
+                // length = sprintf(response,"-ERR no such key\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -211,10 +218,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
             kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
-                length = sprintf(response,":1\r\n");
+                // length = sprintf(response,":1\r\n");
                 // printf("EXIST\r\n");
             }else{
-                length = sprintf(response,":0\r\n");
+                // length = sprintf(response,":0\r\n");
                 // printf("NOT EXIST\r\n");
             }
             break;
@@ -623,7 +630,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
                             return 0;
                         }
-                        tokens[0] = m_malloc(cmd_len + 1);
+                        tokens[0] = malloc(cmd_len + 1);
                         memcpy(tokens[0], &tcopy[i], cmd_len);
                         if (tokens[0]) {
                             for(int k = 0; tokens[0][k]; k++) {
@@ -673,7 +680,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     if(i + *key_len > length){
                         return 0; // 数据不完整
                     }
-                    tokens[1] = m_malloc(*key_len + 1);
+                    tokens[1] = malloc(*key_len + 1);
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
                     // printf("key:%s\n",tokens[1]);
@@ -727,7 +734,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         // save_i=i;
                         return 0;
                     }
-                    tokens[2] = m_malloc(*value_len + 1);
+                    tokens[2] = malloc(*value_len + 1);
                     memcpy(tokens[2], &tcopy[i], *value_len );
                     tokens[2][*value_len] = '\0';
                     // printf("value:%s\n",tokens[2]);
@@ -755,9 +762,9 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
             int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len, push_flag);
             resp_len += len;
-            if(tokens[0]) m_free(tokens[0]);
-            if(tokens[1]) m_free(tokens[1]);
-            if(tokens[2]) m_free(tokens[2]);
+            if(tokens[0]) free(tokens[0]);
+            if(tokens[1]) free(tokens[1]);
+            if(tokens[2]) free(tokens[2]);
             tokens[0] = NULL;
             tokens[1] = NULL;
             tokens[2] = NULL;
@@ -818,6 +825,13 @@ int kvs_is_complete(char *msg, int length){
     return j;
 }
 
+void sync_mes_init(void) {
+    if (sync_mes != NULL) return;  
+    
+    sync_mes_cap = 1024 * 1024 * 9;
+    sync_mes = calloc(1, sync_mes_cap);
+}
+
 
 int packet_len = 0;
 int kvs_protocol(char *msg, int length, char *response){
@@ -829,37 +843,159 @@ int kvs_protocol(char *msg, int length, char *response){
     static char *mes = NULL;
     static int mes_len = 0;
     if (mes == NULL) {
-        mes = malloc(1024 * 1024 * 8);
+        mes = malloc(1024 * 1024 * 9);
         mes_len = 0;
     }
     
+    if(strncmp(msg, "+OK", 3) == 0) {
+
+        int i = 0, j = 0, in = 0;
+        while(msg[i]){
+            if(msg[i] == '*') {
+                msg[j] = msg[i];
+                in ++;
+                j++;
+            }
+            i++; 
+        }
+        msg[j] = '\0'; 
+        if(in == 0) return 0;
+    }
+
     if(cfg.full_save_flag == 1){
         if(strcmp(msg, "save\n") == 0){
-            char *mes_array = malloc(3072000);
-            kvs_array_save(globle_array, mes_array);
-            char *mes_skip = malloc(3072000);
-            kvs_skiplist_save(globle_skiplist, mes_skip);
-            char *mes_rbtree = malloc(3072000);
-            kvs_rbtree_save(globle_rbtree, mes_rbtree);
-            char *mes_hash = malloc(3072000);
-            kvs_hash_save(globle_hash, mes_hash);
+            char *tmp = calloc(1, 1024 * 1024 * 8);
             FILE *fp_full = fopen("full.txt", "a+");
-            fputs(mes_array, fp_full);
-            fputs(mes_skip, fp_full);
-            fputs(mes_rbtree, fp_full);
-            fputs(mes_hash, fp_full);
+
+            kvs_array_save(globle_array, tmp);
+            fputs(tmp, fp_full);
             fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 8);
+
+            kvs_skiplist_save(globle_skiplist, tmp);
+            fputs(tmp, fp_full);
+            fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 8);
+
+            int rbtree_length = kvs_rbtree_save(globle_rbtree, tmp);
+            fputs(tmp, fp_full);
+            fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 8);
+
+            int hash_length = kvs_hash_save(globle_hash, tmp);
+            fputs(tmp, fp_full);
+            fflush(fp_full);
+            memset(tmp, 0, 1024 * 1024 * 8);
+
+
             fclose(fp_full);
 
-            free(mes_array);
-            free(mes_hash);
-            free(mes_rbtree);
-            free(mes_skip);
+            kvs_protocol_push(msg, strlen(msg));
             return 0;
         }
 
     }
+
     
+    
+
+    if(length >= 5 && strncmp(msg, "SYNC\n", 5) == 0){
+        sync_mes_init();
+        FILE *fp = NULL;
+        if(cfg.add_save == 1){
+            fp = fopen("add.txt", "r");
+        }else if(cfg.full_save == 1){
+            fp = fopen("full.txt", "r");
+        }
+
+        if (!fp) {
+            sprintf(response, "$4\r\nDONE\r\n");
+            return 0;
+        }
+        
+        char line[1024];
+        char cmd[1024] = {0};
+        char key[1024] = {0};
+        char value[1024] = {0};
+        int has_key = 0, has_cmd = 0, has_value = 0;
+        int key_len = 0, value_len = 0;
+        memset(sync_mes, 0, sizeof(sync_mes));
+        while (fgets(line, sizeof(line), fp)) {
+
+            // line[strcspn(line, "\r\n")] = '\0';
+            
+            if (strncmp(line, "cmd: ", 5) == 0) {
+                sscanf(line, "cmd: %s\r\n", cmd);
+                has_cmd = 1;
+            }else if (strncmp(line, "key_len: ", 9) == 0) {
+                sscanf(line, "key_len: %d\r\n", &key_len);
+            }else if (strncmp(line, "key: ", 5) == 0) {
+                strncpy(key, line + 5, key_len);
+                key[key_len] = '\0';
+                // printf("key:%s", key);
+                has_key = 1;
+            }else if (strncmp(line, "value_len: ", 11) == 0) {
+                sscanf(line, "value_len: %d\r\n", &value_len);
+            }else if (strncmp(line, "value: ", 7) == 0) {
+                strncpy(value, line + 7, value_len);
+                value[value_len] = '\0';
+                // printf("value:%s", value);s
+                has_value = 1;
+            }
+            
+            int i = 0;
+            while(i < 8){
+                if(strcmp(cmd, key_value_command[i]) == 0){
+                    i = 10;
+                    break;
+                }
+            }
+            if(i = 10){
+                if (has_value == 1) {
+                    char resp[4096];
+                    int n = snprintf(resp, sizeof(resp),"*3\r\n$3\r\n%s\r\n$%ld\r\n%s\r\n$%ld\r\n%s\r\n",cmd, strlen(key), key, strlen(value), value);
+                    resp[n] = '\0';
+                    // printf("push_msg:%s\n", resp);
+                    // kvs_protocol_push(resp);
+                    if (sync_mes_len + n < sync_mes_cap) {
+                        memcpy(sync_mes + sync_mes_len, resp, n);
+                        sync_mes_len += n;
+                    }
+                    
+                    has_cmd = 0;
+                    has_key = 0;
+                    has_value = 0;
+                    key_len = 0;
+                    value_len = 0;
+                    cmd[0] = key[0] = value[0] = '\0';
+                }
+            }else{
+                if (has_key == 1) {
+                    char resp[4096];
+                    int n = snprintf(resp, sizeof(resp),"*2\r\n$3\r\n%s\r\n$%ld\r\n%s\r\n",cmd, strlen(key), key);
+                    
+                    resp[n] = '\0';
+                    strcat(sync_mes, resp);
+                    
+                    has_cmd = 0;
+                    has_key = 0;
+                    has_value = 0;
+                    key_len = 0;
+                    cmd[0] = key[0] = '\0';
+                }
+            }
+        }
+
+            fclose(fp);
+            kvs_protocol_push(sync_mes, sync_mes_len);
+            memset(sync_mes, 0, 1024 * 1024 * 9);
+            sync_mes_len = 0;
+            memset(mes, 0, 1024 * 1024 * 9);
+            mes_len = 0;
+            printf("DONE\r\n");
+            return 0;
+    }
+
     memset(response, 0, BUFFER_LENGTH);
     memcpy(mes + mes_len,msg,length);
     mes_len += length;
@@ -884,7 +1020,7 @@ int kvs_protocol(char *msg, int length, char *response){
         int count = kvs_split_token(mes, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
 
         if(push_flag){
-            kvs_protocol_push(mes);
+            kvs_protocol_push(mes, strlen(mes));
         }
 
         // 把单条回复拼到总 response
@@ -907,25 +1043,25 @@ int kvs_protocol(char *msg, int length, char *response){
 int init_kvs(void){
 #if ENABLE_ARRAY
     // memset(globle_array,0,sizeof(kvs_array_t));
-    globle_array = m_malloc(sizeof(kvs_array_t));
+    globle_array = malloc(sizeof(kvs_array_t));
     kvs_array_create(globle_array);
 #endif
 
 #if ENABLE_RBTREE
     // memset(globle_rbtree,0,sizeof(kvs_rbtree_t));
-    globle_rbtree = m_malloc(sizeof(kvs_rbtree_t));
+    globle_rbtree = malloc(sizeof(kvs_rbtree_t));
     kvs_rbtree_create(globle_rbtree);
 #endif
 
 #if ENABLE_HASH
     // memset(globle_hash,0,sizeof(kvs_hash_t));
-    globle_hash = m_malloc(sizeof(kvs_hash_t));
+    globle_hash = malloc(sizeof(kvs_hash_t));
     kvs_hash_create(globle_hash);
 #endif
 
 #if ENABLE_SKIPTABLE
     // memset(globle_skiplist, 0, sizeof(kvs_skiplist_t));
-    globle_skiplist = m_malloc(sizeof(kvs_skiplist_t));
+    globle_skiplist = malloc(sizeof(kvs_skiplist_t));
     kvs_skiplist_create(globle_skiplist);
 #endif
     return 0;
@@ -934,22 +1070,22 @@ int init_kvs(void){
 void dest_kvs(void){
 #if ENABLE_ARRAY
 kvs_array_destory(globle_array);
-m_free(globle_array);
+free(globle_array);
 #endif
 
 #if ENABLE_RBTREE
 kvs_rbtree_destory(globle_rbtree);
-m_free(globle_rbtree);
+free(globle_rbtree);
 #endif
 
 #if ENABLE_HASH
 kvs_hash_destory(globle_hash);
-m_free(globle_hash);
+free(globle_hash);
 #endif
 
 #if ENABLE_SKIPTABLE
 kvs_skiplist_destroy(globle_skiplist);
-m_free(globle_skiplist);
+free(globle_skiplist);
 #endif
 }
 
@@ -1301,7 +1437,7 @@ int main(int argc, char const *argv[])
     // if(argc != 3) return -1;
 
      
-    load_config("config/server.conf", &cfg);
+    load_config("config/server_slave.conf", &cfg);
     
     init_kvs();
     char cmd[TXT_LENGTH] = {0};
@@ -1315,7 +1451,7 @@ int main(int argc, char const *argv[])
         }
         reactor_start(cfg.port,kvs_protocol);
     }else if(cfg.mode == 2){
-        
+
         if(cfg.add_save == 1) kvs_add_read(cmd, key, value);
         if(cfg.full_save == 1) kvs_full_read(cmd, key, value);
 

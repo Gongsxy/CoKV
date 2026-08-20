@@ -108,7 +108,7 @@ void testcase(int connfd){
 			// length += strlen(cmd);
 			idx++;
 			memset(tmp, 0, 4096);
-
+			
 			// get key
 
 			sprintf(tmp, "%s%d", test_key, total_num);
@@ -276,6 +276,7 @@ int main(int argc, char *argv[]) {
 	if(cfg.full_save_flag == 1){
 		char tmp[128] = {0};
 		while(fgets(tmp, sizeof(tmp), stdin)){
+			printf("enter save\n");
 			if(strcmp(tmp, "save\n") == 0) {
 				send_msg(connfd, tmp, strlen(tmp));
                 break;

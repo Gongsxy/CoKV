@@ -58,8 +58,15 @@ int load_config(const char *filename, Config *cfg){
                 if(strcmp(mes, "ip") == 0){
                     strncpy(cfg->ip, val, sizeof(cfg->ip) - 1);
                     cfg->ip[sizeof(cfg->ip) - 1] = '\0';
-                }else if(strcmp(mes, "port") == 0){
+                }
+                if(strcmp(mes, "port") == 0){
                     cfg->port = atoi(val);
+                }
+                if(strcmp(mes, "show_response") == 0){
+                    cfg->show_response = atoi(val);
+                }
+                if(strcmp(mes, "use_mempool") == 0){
+                    cfg->use_mempool = atoi(val);
                 }
                 break;
             }
@@ -116,6 +123,10 @@ int load_config(const char *filename, Config *cfg){
                 if(strcmp(mes, "is_salve") == 0){
                     cfg->is_slave = atoi(val);
                 }
+                if(strcmp(mes, "push_save_flag") == 0){
+                    cfg->push_save_flag = atoi(val);
+                }
+                
             }
         }
         memset(line, 0, 128);

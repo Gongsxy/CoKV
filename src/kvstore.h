@@ -56,7 +56,7 @@ struct fd_info {
 };
 extern struct fd_info *fd_list;
 
-char *kvs_protocol_combination(char *cmd, char *key, char *value);
+
 int check_fd_to_ip(int fd, char *ip);
 
 typedef struct son_conn{
@@ -134,7 +134,8 @@ int kvs_array_set(kvs_array_t *inst, char *key, char *value);
 int kvs_array_del(kvs_array_t *inst, char *key);
 int kvs_array_mod(kvs_array_t *inst, char *key, char *value);
 int kvs_array_exist(kvs_array_t *inst, char *key);
-int kvs_array_save(kvs_array_t *inst,char *msg);
+// int kvs_array_save(kvs_array_t *inst, FILE *fp);
+int kvs_array_save(kvs_array_t *inst, char *msg);
 
 extern kvs_array_t *globle_array;
 
@@ -255,11 +256,13 @@ void kvs_txt_full_load(char *msg);
 
 void *m_malloc(int size);
 void m_free(void *ptr);
+void mpool_destroy(void);
+void m_reset();
 
 #endif
 
 int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
-static void rbtree_save_traversal(kvs_rbtree_t *T, rbtree_node *node, char *msg);
+static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char *msg);
 int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
 int kvs_hash_save(kvs_hash_t *hash, char *msg);
 

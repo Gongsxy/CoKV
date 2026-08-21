@@ -205,7 +205,7 @@ void testcase(int connfd){
 }
 
 void get_old_mes(int connfd){
-	FILE *fp = fopen("../sync.log", "r");
+	FILE *fp = fopen("config/sync.log", "r");
 
 	char mes[1024] = {0};
 	int i = 0;
@@ -219,7 +219,7 @@ void get_old_mes(int connfd){
 
 	fclose(fp);
 
-	FILE *fp_tmp = fopen("../sync.log", "w");
+	FILE *fp_tmp = fopen("config/sync.log", "w");
 	fclose(fp_tmp);
 
 	// send_msg(connfd, mes, strlen(mes));
@@ -251,7 +251,7 @@ static Config cfg;
 // ./testcase 192.168.159.137 2000
 int main(int argc, char *argv[]) {
 
-	load_config("../config/testcase_full.conf", &cfg);
+	load_config("config/testcase_full.conf", &cfg);
 
 	int connfd = connect_tcpserver(cfg.ip, cfg.port);
 	if(cfg.get_old_mes_flag == 1) get_old_mes(connfd);	

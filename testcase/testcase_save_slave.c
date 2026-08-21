@@ -252,7 +252,6 @@ int connect_tcpserver(const char *ip, unsigned short port) {
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = inet_addr(ip);
 	server_addr.sin_port = htons(port);
-
 	if (0 !=  connect(connfd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in))) {
 		perror("connect");
 		return -1;
@@ -268,8 +267,7 @@ static Config cfg;
 // ./testcase 192.168.159.137 2000
 int main(int argc, char *argv[]) {
 
-	load_config("../config/testcase_add.conf", &cfg);
-
+	load_config("config/testcase_add.conf", &cfg);
 	int connfd = connect_tcpserver(cfg.ip, cfg.port);
 	if(cfg.get_old_mes_flag == 1) get_old_mes(connfd);	
 	if(cfg.mode == 1) testcase(connfd);

@@ -921,9 +921,9 @@ int kvs_protocol(char *msg, int length, char *response){
         sync_mes_init();
         FILE *fp = NULL;
         if(cfg.add_save == 1){
-            fp = fopen("add.txt", "r");
+            fp = fopen("config/add.txt", "r");
         }else if(cfg.full_save == 1){
-            fp = fopen("full.txt", "r");
+            fp = fopen("config/full.txt", "r");
         }
 
         if (!fp) {

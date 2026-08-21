@@ -222,7 +222,7 @@ void testcase(int connfd){
 }
 
 void get_old_mes(int connfd){
-	FILE *fp = fopen("../sync.log", "r");
+	FILE *fp = fopen("config/sync.log", "r");
 
 	char mes[1024] = {0};
 	int i = 0;
@@ -236,7 +236,7 @@ void get_old_mes(int connfd){
 
 	fclose(fp);
 
-	FILE *fp_tmp = fopen("../sync.log", "w");
+	FILE *fp_tmp = fopen("config/sync.log", "w");
 	fclose(fp_tmp);
 
 	// send_msg(connfd, mes, strlen(mes));

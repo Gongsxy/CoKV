@@ -238,7 +238,7 @@ int check_fd_to_ip(int fd, char *ip){
 }
 
 
-int reactor_start(unsigned short port, msg_handle hand) {
+int reactor_start_sync(unsigned short port, msg_handle hand) {
 
 	// fd_list = m_malloc(sizeof(struct fd_info));
 	fd_list = malloc(sizeof(struct fd_info) * 512);
@@ -252,7 +252,7 @@ int reactor_start(unsigned short port, msg_handle hand) {
 
 	epfd = epoll_create(1);
 
-	load_config("config/sync.conf", &cfg);
+	load_config("config/server_slave.conf", &cfg);
 
 	int i = 0;
 
@@ -266,7 +266,7 @@ int reactor_start(unsigned short port, msg_handle hand) {
 		set_event(sockfd, EPOLLIN, 1);
 	}
 
-
+	printf("%d", cfg.is_slave);
 	if (cfg.is_slave == 1) {
         int master_fd = socket(AF_INET, SOCK_STREAM, 0);
         struct sockaddr_in addr = {0};
@@ -280,6 +280,7 @@ int reactor_start(unsigned short port, msg_handle hand) {
             conn_list[master_fd].r_action.recv_callback = recv_cb;  
             
 			send(master_fd, "SYNC\n", 5, 0);
+			printf("has send\n");
 
 
         } else {

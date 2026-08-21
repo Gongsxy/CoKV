@@ -120,7 +120,7 @@ int load_config(const char *filename, Config *cfg){
                 if(strcmp(mes, "push_flag") == 0){
                     cfg->push_flag = atoi(val);
                 }
-                if(strcmp(mes, "is_salve") == 0){
+                if(strcmp(mes, "is_slave") == 0){
                     cfg->is_slave = atoi(val);
                 }
                 if(strcmp(mes, "push_save_flag") == 0){

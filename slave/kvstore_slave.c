@@ -499,11 +499,11 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             FILE *fp;
             if(cfg.add_save == 1){
                 if(cfg.full_save == 1){
-                    fp = fopen("add.txt", "r");
+                    fp = fopen("config/add.txt", "r");
                 }
 
             }else if(cfg.full_save == 1){
-                fp = fopen("full.txt", "r");
+                fp = fopen("config/full.txt", "r");
             }
             
             if (fp == NULL) {
@@ -1190,9 +1190,9 @@ void kvs_txt_load(char *cmd, char *key, char *value){
 
 // read requesies in a.txt
 void kvs_add_read(char *cmd, char *key, char *value){
-    FILE *fp = fopen("add.txt", "r");
+    FILE *fp = fopen("config/add.txt", "r");
     if(fp == NULL){
-        perror("open a.txt");
+        perror("open 1a.txt");
         return;
     }
 
@@ -1310,9 +1310,9 @@ void kvs_add_read(char *cmd, char *key, char *value){
 
 void kvs_full_read(char *cmd, char *key, char *value){
 
-    FILE *fp = fopen("config/full.txt", "r");
+    FILE *fp = fopen("./config/full.txt", "r");
     if(fp == NULL){
-        perror("open a.txt");
+        perror("open 2a.txt");
         return;
     }
 
@@ -1449,7 +1449,7 @@ int main(int argc, char const *argv[])
         if(cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
         }
-        reactor_start(cfg.port,kvs_protocol);
+        reactor_start_sync(cfg.port,kvs_protocol);
     }else if(cfg.mode == 2){
 
         if(cfg.add_save == 1) kvs_add_read(cmd, key, value);

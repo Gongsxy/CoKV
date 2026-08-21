@@ -120,7 +120,7 @@ typedef struct ksv_array_s{
 #endif
 
 
-int reactor_start(unsigned short port, msg_handle hand);
+int reactor_start_sync(unsigned short port, msg_handle hand);
 int proactor_start(unsigned short port, msg_handle handle);
 
 

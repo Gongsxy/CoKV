@@ -2,7 +2,9 @@
 
 
 #include "kvstore.h"
+#include "load_conf.h"
 
+static Config cfg;
 // #include "kvstore.h"
 
 #define EVENT_ACCEPT   	0
@@ -68,11 +70,28 @@ int set_event_send(struct io_uring *ring, int sockfd,
 		.event = EVENT_WRITE,
 	};
 	
+	
 	io_uring_prep_send(sqe, sockfd, buf, len, flags);
 	memcpy(&sqe->user_data, &accept_info, sizeof(struct conn_info));
 
 }
 
+
+// int set_event_send_sync(struct io_uring *ring, int sockfd,
+// 				     int flags) {
+
+// 	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+
+// 	struct conn_info accept_info = {
+// 		.fd = sockfd,
+// 		.event = EVENT_WRITE,
+// 	};
+	
+	
+// 	io_uring_prep_send(sqe, sockfd, "SYNC\n", 5, flags);
+// 	memcpy(&sqe->user_data, &accept_info, sizeof(struct conn_info));
+
+// }
 
 
 int set_event_accept(struct io_uring *ring, int sockfd, struct sockaddr *addr,
@@ -107,7 +126,9 @@ int proactor_start(unsigned short port, msg_handle handle) {
 	struct io_uring ring;
 	io_uring_queue_init_params(ENTRIES_LENGTH, &ring, &params);
 
-	fd_list = m_malloc(sizeof(struct fd_info));
+
+// mempool
+	fd_list = malloc(sizeof(struct fd_info));
 #if 0
 	struct sockaddr_in clientaddr;	
 	socklen_t len = sizeof(clientaddr);
@@ -130,6 +151,7 @@ int proactor_start(unsigned short port, msg_handle handle) {
 		io_uring_submit(&ring);
 
 
+
 		struct io_uring_cqe *cqe;
 		io_uring_wait_cqe(&ring, &cqe);
 
@@ -139,7 +161,6 @@ int proactor_start(unsigned short port, msg_handle handle) {
 		int i = 0;
 
 		for (i = 0;i < nready;i ++) {
-
 			struct io_uring_cqe *entries = cqes[i];
 			struct conn_info result;
 			memcpy(&result, &entries->user_data, sizeof(struct conn_info));
@@ -147,6 +168,7 @@ int proactor_start(unsigned short port, msg_handle handle) {
 			if (result.event == EVENT_ACCEPT) {
 
 				set_event_accept(&ring, sockfd, (struct sockaddr*)&clientaddr, &len, 0);
+				
 				//printf("set_event_accept\n"); //
 
 				int connfd = entries->res;
@@ -160,8 +182,11 @@ int proactor_start(unsigned short port, msg_handle handle) {
 					fd_count++;
 
 				}
-				if(strcmp(ip,"192.168.159.136") == 0){
+				if(strcmp(ip,cfg.ip) == 0){
+					
 					fd_list[fd_count].fd = connfd;
+					char *buf = "SYNC\n";
+					set_event_send(&ring, connfd, buf, 5, 0);
 					strcpy(fd_list[fd_count].ip, ip);
 					fd_count++;
 				}
@@ -215,8 +240,10 @@ int proactor_start(unsigned short port, msg_handle handle) {
 		}
 
 		io_uring_cq_advance(&ring, nready);
-		// kvs_push_clear();		
-		m_free(fd_list);
+		// kvs_push_clear();	
+
+			// mempool
+		free(fd_list);
 	}
 
 }

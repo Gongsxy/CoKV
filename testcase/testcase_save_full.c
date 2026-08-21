@@ -205,7 +205,7 @@ void testcase(int connfd){
 }
 
 void get_old_mes(int connfd){
-	FILE *fp = fopen("config/sync.log", "r");
+	FILE *fp = fopen("./config/sync.log", "r");
 
 	char mes[1024] = {0};
 	int i = 0;

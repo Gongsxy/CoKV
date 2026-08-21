@@ -213,6 +213,7 @@ void get_old_mes(int connfd){
 		i++;
 		if(i != 0 && i % 10000 == 0){
 			printf("%s",mes);
+			// send_msg(connfd, mes, strlen(mes));
 		}
 		memset(mes, 0, 1024);
 	}	
@@ -222,7 +223,6 @@ void get_old_mes(int connfd){
 	FILE *fp_tmp = fopen("config/sync.log", "w");
 	fclose(fp_tmp);
 
-	// send_msg(connfd, mes, strlen(mes));
 }
 
 int connect_tcpserver(const char *ip, unsigned short port) {

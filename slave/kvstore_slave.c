@@ -865,7 +865,7 @@ int kvs_protocol(char *msg, int length, char *response){
     if(cfg.full_save_flag == 1){
         if(strcmp(msg, "save\n") == 0){
             char *tmp = calloc(1, 1024 * 1024 * 8);
-            FILE *fp_full = fopen("full.txt", "a+");
+            FILE *fp_full = fopen("config/full.txt", "a+");
 
             kvs_array_save(globle_array, tmp);
             fputs(tmp, fp_full);
@@ -903,9 +903,9 @@ int kvs_protocol(char *msg, int length, char *response){
         sync_mes_init();
         FILE *fp = NULL;
         if(cfg.add_save == 1){
-            fp = fopen("add.txt", "r");
+            fp = fopen("config/add.txt", "r");
         }else if(cfg.full_save == 1){
-            fp = fopen("full.txt", "r");
+            fp = fopen("config/full.txt", "r");
         }
 
         if (!fp) {
@@ -1120,7 +1120,7 @@ int save_old_mes(char *cmd, char *key, char *value){
 
 int write_old_mes(void){
     if(old_mes == NULL) return 0;
-    FILE *fp = fopen("sync.log", "w");
+    FILE *fp = fopen("config/sync.log", "w");
     fputs(old_mes, fp);
     fflush(fp);
     fclose(fp);
@@ -1131,7 +1131,7 @@ int write_old_mes(void){
 }
 
 void kvs_txt_load(char *cmd, char *key, char *value){
-    printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
+    // printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
 #if ENABLE_ARRAY
     if(strcmp(cmd,"SET") == 0){
         kvs_array_set(globle_array, key, value);
@@ -1310,7 +1310,7 @@ void kvs_add_read(char *cmd, char *key, char *value){
 
 void kvs_full_read(char *cmd, char *key, char *value){
 
-    FILE *fp = fopen("full.txt", "r");
+    FILE *fp = fopen("config/full.txt", "r");
     if(fp == NULL){
         perror("open a.txt");
         return;

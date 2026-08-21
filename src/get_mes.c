@@ -6,7 +6,7 @@
 
 int get_mes(){
 
-    FILE *fp = fopen("sync.log", "r");
+    FILE *fp = fopen("config/sync.log", "r");
     printf("open");
     if(fp == NULL) return -1;
 	FILE *fp_write = fopen("testcase/test.txt", "a+");

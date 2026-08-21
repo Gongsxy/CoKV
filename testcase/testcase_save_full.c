@@ -76,7 +76,7 @@ void testcase(int connfd){
 
 	size_t cap = 4096000; 
     size_t len = 0;
-    for(total_num = 0; total_num < 10; total_num ++){
+    for(total_num = 0; total_num < 100000; total_num ++){
 		
 		if(j == 10){
 			j = 0;
@@ -259,9 +259,10 @@ int main(int argc, char *argv[]) {
 	if(cfg.full_save_flag == 1){
 		char tmp[128] = {0};
 		while(fgets(tmp, sizeof(tmp), stdin)){
+			printf("enter save\n");
 			if(strcmp(tmp, "save\n") == 0) {
 				send_msg(connfd, tmp, strlen(tmp));
-                break;
+                return 0;
             }
 		}
 	}

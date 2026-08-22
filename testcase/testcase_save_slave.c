@@ -267,7 +267,7 @@ static Config cfg;
 // ./testcase 192.168.159.137 2000
 int main(int argc, char *argv[]) {
 
-	load_config("config/testcase_add.conf", &cfg);
+	load_config("config/testcase_save.conf", &cfg);
 	int connfd = connect_tcpserver(cfg.ip, cfg.port);
 	if(cfg.get_old_mes_flag == 1) get_old_mes(connfd);	
 	if(cfg.mode == 1) testcase(connfd);

@@ -248,7 +248,7 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg){
 
             char tmp[256] = {0};
 
-            sprintf(tmp,"cmd: HSET\r\nkey_len: %d\r\nkey: %s\r\nvalue_len: %d\r\nvalue: %s\r\n",key_len,node->key,value_len,node->value
+            sprintf(tmp,"key_len: %d\r\nkey: %s\r\nvalue_len: %d\r\nvalue: %s\r\n",key_len,node->key,value_len,node->value
             );
 
             strcat(msg, tmp);

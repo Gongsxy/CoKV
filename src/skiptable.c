@@ -246,7 +246,7 @@ int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg){
         key_len = strlen(cur->key);
         value_len = strlen(cur->value);
 
-        sprintf(tmp, "cmd: SSET\r\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",key_len, cur->key, value_len, cur->value);
+        sprintf(tmp, "key_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",key_len, cur->key, value_len, cur->value);
         strcat(msg, tmp);
 
         cur = cur->forward[0];

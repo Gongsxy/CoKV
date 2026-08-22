@@ -498,7 +498,7 @@ static void rbtree_save_traversal(kvs_rbtree_t *T, rbtree_node *node, char *msg)
 
     int offset = strlen(msg);
 
-    sprintf(msg + offset,"cmd: RSET\r\nkey_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",(int)strlen(node->key),node->key,(int)strlen(node->value),(char *)node->value);
+    sprintf(msg + offset,"key_len: %d\nkey: %s\nvalue_len: %d\nvalue: %s\n",(int)strlen(node->key),node->key,(int)strlen(node->value),(char *)node->value);
 
     rbtree_save_traversal(T, node->right, msg);
 }

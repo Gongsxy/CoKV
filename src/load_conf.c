@@ -68,6 +68,10 @@ int load_config(const char *filename, Config *cfg){
                 if(strcmp(mes, "use_mempool") == 0){
                     cfg->use_mempool = atoi(val);
                 }
+                if(strcmp(mes, "storage_structure") == 0){
+                    strncpy(cfg->storage_structure, val, sizeof(cfg->storage_structure) - 1);
+                    cfg->storage_structure[strcspn(cfg->storage_structure, "\r\n")] = '\0';
+                }
                 break;
             }
             case app:{

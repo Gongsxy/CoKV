@@ -6,7 +6,8 @@ typedef struct {
     int port;
     int show_response;
     int use_mempool;
-
+    char storage_structure[64];
+    
     // app
     int mode;
     int full_save;

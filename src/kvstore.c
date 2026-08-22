@@ -1168,7 +1168,7 @@ int write_old_mes(void){
 
 // ok
 void kvs_txt_load(char *cmd, char *key, char *value){
-    // printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
+    printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
 #if ENABLE_ARRAY
     if(strcmp(cmd,"SET") == 0){
         kvs_array_set(globle_array, key, value);
@@ -1349,123 +1349,75 @@ void kvs_add_read(char *cmd, char *key, char *value){
 // ok
 void kvs_full_read(char *cmd, char *key, char *value){
 
-    FILE *fp = fopen("config/full.txt", "r");
-    if(fp == NULL){
+    int fd = open("config/full.txt", O_RDONLY);
+    if(fd == -1){
         perror("open a.txt");
         return;
     }
+    
 
-    char buf[TXT_LENGTH] = {0}; 
-    int status = CMD;
-    int key_len = 0;
-    int value_len = 0;
-
-    while(fgets(buf, sizeof(buf), fp)){
-        if(buf[0] == '\n' || buf[0] == '\0') continue;
-
-        switch(status){
-            case CMD:
-                if(strncmp(buf,"key: ",5) == 0){
-                    strcat(key, buf + 5);
-                    cmd[strcspn(cmd,"\r\n")] = 0;
-                    status = KEY;
-                }else if(strncmp(buf,"key_len: ",9) == 0){
-                    sscanf(buf, "key_len: %d", &key_len);
-                }else{
-                    strcat(cmd, buf + 5);
-                }
-                break;
-            case KEY:
-                if(strncmp(buf,"value: ",7) == 0){
-                    strcat(value, buf + 7);
-                    status = VALUE;
-                }else if(strncmp(buf,"cmd: ",5) == 0){
-                    int len = strlen(key);
-                    if(len > 0 && strlen(key) >= len){
-                        key[len - 1] = '\0';
-                    }
-                    cmd[strcspn(cmd,"\r\n")]=0;
-                    kvs_txt_load(cmd, key, value);
-                    if(cfg.load_old_mes == 1){
-                        save_old_mes(cmd, key, value);
-                    }
-                    memset(cmd,0,TXT_LENGTH);
-                    memset(key,0,TXT_LENGTH);
-                    memset(value,0,TXT_LENGTH);
-                    strcat(cmd, buf + 5);
-                    key_len=0;
-                    value_len=0;
-                    status = CMD;
-
-                }else if(strncmp(buf,"value_len: ",11) == 0){
-                    sscanf(buf, "value_len: %d", &value_len);
-                }else{
-                    strcat(key, buf);
-                }
-                break;
-            case VALUE:
-
-                if(strncmp(buf,"cmd: ",5) == 0){
-                    int len = strlen(value);
-                    if(len > 0 && value[len] == '\n'){
-                        value[len] = '\0';
-                    }
-                    cmd[strcspn(cmd,"\r\n")]=0;
-                    if(key_len > 0 && strlen(key) >= key_len){
-                        key[key_len] = '\0';
-                    }
-
-                    if(value_len > 0 && strlen(value) >= value_len){
-                        value[value_len] = '\0';
-                    }
-                    kvs_txt_load(cmd, key, value);
-
-                    if(cfg.load_old_mes == 1){
-                        save_old_mes(cmd, key, value);
-                    }
-
-                    memset(cmd,0,TXT_LENGTH);
-                    memset(key,0,TXT_LENGTH);
-                    memset(value,0,TXT_LENGTH);
-                    strcat(cmd, buf + 5);
-                    key_len = 0;
-                    value_len = 0;
-                    status = CMD;
-                }else{
-                    strcat(value, buf);
-                }
-                break;
-        }
-            
-        memset(buf, 0, strlen(buf));
+    struct stat st;
+    if(fstat(fd, &st) < 0){
+        perror("fstat error\n");
+        close(fd);
+        return ;
     }
-    if(strlen(key) > 0){
-        int len = key_len;
-        if(key_len > 0 && strlen(key) >= key_len){
-            key[key_len] = '\0';
-        }
+    off_t size = st.st_size;
+    if(size < 0){
+        perror("fstat size error\n");
+        return ;
     }
-    if(strlen(value) > 0){
-        int len = value_len;
-        if(value_len > 0 && strlen(value) >= value_len){
-            value[value_len] = '\0';
-        }
-    }
-    if(strlen(cmd) > 0){
-        kvs_txt_load(cmd,key,value);
-        if(cfg.load_old_mes == 1){
-            save_old_mes(cmd, key, value);
-            write_old_mes();
-        }
-        free(old_mes);
-        memset(cmd,0,TXT_LENGTH);
-        memset(key,0,TXT_LENGTH);
-        memset(value,0,TXT_LENGTH);
-        value_len=0;
-        status = KEY;
+    size_t len = st.st_size;
+    char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    if(addr == MAP_FAILED){
+        perror("mmap error\n");
+        return ;
     }
 
-    fclose(fp);
+
+    char *p = addr;
+    char *end = addr + len;
+    while(p < end){
+        int key_len = 0, value_len = 0;
+        if(strncmp(p, "key_len: ", 9) == 0){
+            int n = 0;
+            sscanf(p, "key_len: %d%n",&key_len, &n);
+            p += n;
+            while(p < end && (*p == '\r' || *p == '\n')) p++;
+        }
+        if(strncmp(p, "key: ", 5) == 0){
+            p += 5;
+            memcpy(key, p, key_len);
+            p += key_len;
+            while(p < end && (*p == '\r' || *p == '\n')) p++;
+        }
+        if(strncmp(p, "value_len: ", 11) == 0){
+            int n = 0;
+            sscanf(p, "value_len: %d%n",&value_len, &n);
+            p += n;
+            while(p < end && (*p == '\r' || *p == '\n')) p++;
+        }
+        if(strncmp(p, "value: ", 7) == 0){
+            p += 7;
+            memcpy(value, p, value_len);
+            p += value_len;
+            while(p < end && (*p == '\r' || *p == '\n')) p++;
+        }
+        if(key && value){
+            if(strncmp(cfg.storage_structure, "array", 5) == 0){
+                cmd = "SET";
+            }else if(strncmp(cfg.storage_structure, "rbtree", 6) == 0){
+                cmd = "RSET";
+            }else if(strncmp(cfg.storage_structure, "hash", 4) == 0){
+                cmd = "HSET";
+            }else if(strncmp(cfg.storage_structure, "skiptable", 9) == 0){
+                cmd = "SSET";
+            }
+            kvs_txt_load(cmd, key, value);
+        }
+    }
+    
+    
 }
 
 static int add_save_flag = 0;

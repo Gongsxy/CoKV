@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <ctype.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 // #include "server.h"
 

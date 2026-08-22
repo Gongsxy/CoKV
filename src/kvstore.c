@@ -1358,19 +1358,24 @@ void kvs_full_read(char *cmd, char *key, char *value){
 
     struct stat st;
     if(fstat(fd, &st) < 0){
-        perror("fstat error\n");
+        perror("fstat error");
         close(fd);
         return ;
     }
     off_t size = st.st_size;
     if(size < 0){
-        perror("fstat size error\n");
+        perror("fstat size error");
+        close(fd);
         return ;
     }
     size_t len = st.st_size;
+    if(len == 0){
+        close(fd);
+        return;   
+    }
     char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
     if(addr == MAP_FAILED){
-        perror("mmap error\n");
+        perror("mmap error");
         return ;
     }
 
@@ -1403,7 +1408,7 @@ void kvs_full_read(char *cmd, char *key, char *value){
             p += value_len;
             while(p < end && (*p == '\r' || *p == '\n')) p++;
         }
-        if(key && value){
+        if(key_len > 0 && value_len > 0){
             if(strncmp(cfg.storage_structure, "array", 5) == 0){
                 cmd = "SET";
             }else if(strncmp(cfg.storage_structure, "rbtree", 6) == 0){

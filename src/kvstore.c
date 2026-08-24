@@ -149,9 +149,6 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_ARRAY
         case KVS_CMD_SET:{
             ret = kvs_array_set(globle_array,key,value);
-            if(cfg.add_save == 1) {
-                kvs_txt_write(cmd, key, value, key_len, value_len);
-            }
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
                 // printf("ERROR\r\n");
@@ -162,11 +159,6 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_GET:{       
-            if(cfg.add_save == 1) kvs_txt_get(cmd, key, key_len);
-#if FULLSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif 
             char *result = kvs_array_get(globle_array,key);
             if(result == NULL){
                 if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
@@ -179,10 +171,6 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_DEL:{
             ret = kvs_array_del(globle_array,key);
-            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
-#if FULLSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
@@ -197,11 +185,6 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_MOD:{
             ret = kvs_array_mod(globle_array,key,value);
-            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
-
-#if FULLSTORAGE
-                kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
                 // printf("ERROR\r\n");
@@ -216,14 +199,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_EXIST:
             ret = kvs_array_exist(globle_array,key);
-
-            kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("EXIST\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
 
@@ -232,84 +211,50 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_RBTREE
         case KVS_CMD_RSET:{
             ret = kvs_rbtree_set(globle_rbtree,key,value);
-            if(cfg.add_save == 1) kvs_txt_write(cmd, key, value, key_len, value_len);
-#if FULLSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
-
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
-                // printf("ERROR\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
-                // printf("EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_RGET:{
             char *result = kvs_rbtree_get(globle_rbtree,key);
-            if(cfg.add_save == 1){
-                kvs_txt_get(cmd, key, key_len);
-                free(value);
-            }
-#if FULLSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif
             if(result == NULL){
                 if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
-                // printf("NOT EXIST\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
-                // printf("%s\r\n",result);
             }
             break;
         }
         case KVS_CMD_RDEL:{
             ret = kvs_rbtree_del(globle_rbtree,key);
-            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
-#if FULLSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
             }else if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("OK\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_RMOD:{
-            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
-#if FULLSTORAGE
-            kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
             ret = kvs_rbtree_mod(globle_rbtree,key,value);
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
             }else if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
-                // printf("OK\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_REXIST:
             ret = kvs_rbtree_exist(globle_rbtree,key);
-            kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("EXIST\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
 #endif
@@ -317,83 +262,50 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
             int ret = kvs_hash_set(globle_hash,key,value);
-            if(cfg.add_save == 1) kvs_txt_write(cmd, key, value, key_len, value_len);
-#if FULLSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
-                // printf("ERROR\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
-                // printf("EXIST\r\n");/
             }
             break;
         }
         case KVS_CMD_HGET:{
             char *result = kvs_hash_get(globle_hash,key);
-            if(cfg.add_save == 1){
-                kvs_txt_get(cmd, key, key_len);
-                free(value); 
-            }
-#if FULLSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif
             if(result == NULL){
                 if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
-                // printf("NOT EXIST\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
-                // printf("%s\r\n",result);
             }
             break;
         }
         case KVS_CMD_HDEL:{
             ret = kvs_hash_del(globle_hash,key);
-            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
-#if FULLSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
             }else if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("OK\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_HMOD:{
             ret = kvs_hash_mod(globle_hash,key,value);
-            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
-#if FULLSTORAGE
-                kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
             }else if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
-                // printf("OK\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_HEXIST:
             ret = kvs_hash_exist(globle_hash,key);
-            kvs_txt_exist(cmd, key, key_len);
             if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("EXIST\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
 #endif
@@ -401,88 +313,50 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 #if ENABLE_SKIPTABLE
         case KVS_CMD_SSET:{
             ret = kvs_skiplist_set(globle_skiplist,key,value);
-            if(cfg.add_save == 1) kvs_txt_write(cmd, key, value, key_len, value_len);
-#if FULLSTORAGE
-            kvs_txt_write(cmd, key, value, key_len, value_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
-                // printf("ERROR\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
-                // printf("EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_SGET:{
-            char *result = kvs_skiplist_get(globle_skiplist,key);\
-            if(cfg.add_save == 1){
-                kvs_txt_get(cmd, key, key_len);
-                free(value);
-            }
-
-#if FULLSTORAGE
-            kvs_txt_get(cmd, key, key_len);
-            free(value);
-#endif  
+            char *result = kvs_skiplist_get(globle_skiplist,key);
             if(result == NULL){
                 if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
-                // printf("NOT EXIST\r\n");
             }else{          
                 if(cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
-                // printf("%s\r\n",result);
             }
             break;
         }
         case KVS_CMD_SDEL:{
             ret = kvs_skiplist_del(globle_skiplist,key);
-            if(cfg.add_save == 1) kvs_txt_del(cmd, key, key_len);
-
-#if FULLSTORAGE
-            kvs_txt_del(cmd, key, key_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
             }else if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("OK\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_SMOD:{
             ret = kvs_skiplist_mod(globle_skiplist,key,value);
-            if(cfg.add_save == 1) kvs_txt_mod(cmd, key, value, key_len, value_len);
-
-#if FULLSTORAGE
-                kvs_txt_mod(cmd, key, value, key_len, value_len);
-#endif
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
             }else if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
-                // printf("OK\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR no such key\r\n");
-                // printf("NOT EXIST\r\n");
             }
             break;
         }
         case KVS_CMD_SEXIST:
             ret = kvs_skiplist_exist(globle_skiplist,key);
-
-            if(cfg.add_save == 1) kvs_txt_exist(cmd, key, key_len);
-
             if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
-                // printf("EXIST\r\n");
             }else{
                 if(cfg.show_response == 1) length = sprintf(response,":0\r\n");
-                // printf("NOT EXIST\r\n");
             }
 
             break;
@@ -497,11 +371,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_SYNC:{
-            
 
-            // // ½áÊø±ê¼Ç
-            // offset += snprintf(response + offset, remain - offset, "$4\r\nDONE\r\n");
-            // length = offset;
             break;
         }
         default:{
@@ -1031,6 +901,7 @@ int kvs_protocol(char *msg, int length, char *response){
         
         // if (packet_len == 0) break;  
         if (packet_len == 0) break; 
+
         char single_cmd[4096] = {0};
         memcpy(single_cmd, mes, packet_len);
         single_cmd[packet_len] = '\0';
@@ -1040,6 +911,7 @@ int kvs_protocol(char *msg, int length, char *response){
 
         // printf("single_cmd:%s\n", single_cmd);
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
+        if(cfg.add_save == 1) kvs_add_save(single_cmd);
         if(cfg.push_flag){
             kvs_protocol_push(single_cmd, count);
         }

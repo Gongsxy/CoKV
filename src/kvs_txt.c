@@ -132,3 +132,20 @@ char * kvs_txt_get(char *cmd, char* key, int *key_len){
     return NULL;
 }
 
+int kvs_add_save(char *msg){
+    if(msg == NULL) return -1;
+    
+    load_config("config/server.conf", &cfg);
+    int add_flag = cfg.add_save;
+    char* filename = "config/add.txt";
+
+    if(cfg.add_save == 1){
+        FILE *fp = fopen(filename, "a+");
+        if(fp == NULL) return -1;
+        
+        fprintf(fp, "%s", msg);
+        fflush(fp);
+
+        fclose(fp);
+    }
+}

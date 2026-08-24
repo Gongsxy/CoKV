@@ -247,6 +247,7 @@ char * kvs_txt_get(char *cmd, char* key, int *key_len);
 void kvs_txt_read(char *cmd, char *key, char *value);
 void kvs_txt_load(char *cmd, char *key, char *value);
 void kvs_txt_full_load(char *msg);
+int kvs_add_save(char *msg);
 
 // void kvs_txt_load(char *cmd, char *key, char *value);
 

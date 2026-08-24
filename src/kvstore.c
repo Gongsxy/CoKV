@@ -263,9 +263,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         case KVS_CMD_HSET:{
             int ret = kvs_hash_set(globle_hash,key,value);
             if(ret < 0){
-                if(cfg.show_response == 1) length = sprintf(response,"-ERR %s\r\n", "unknown command");
+                if(cfg.show_response == 1 || *response != '0') length = sprintf(response,"-ERR %s\r\n", "unknown command");
             }else{
-                if(cfg.show_response == 1) length = sprintf(response,"+OK\r\n");
+                if(cfg.show_response == 1 || *response != '0') length = sprintf(response,"+OK\r\n");
             }
             break;
         }
@@ -534,7 +534,6 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     }else{
                         tokens[1] = malloc(*key_len + 1);
                     }
-
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
                     // printf("key:%s\n",tokens[1]);
@@ -884,8 +883,9 @@ int kvs_protocol(char *msg, int length, char *response){
         return 0;
     }
 
-
-    memset(response, 0, BUFFER_LENGTH);
+    if(*response != '0'){
+        memset(response, 0, BUFFER_LENGTH);
+    }
     memcpy(mes + mes_len,msg,length);
 
     mes_len += length;
@@ -995,48 +995,6 @@ kvs_skiplist_destroy(globle_skiplist);
 // ok
 int origin_size = 0;
 static char *old_mes = NULL;
-int save_old_mes(char *cmd, char *key, char *value){
-    // FILE *fp = fopen("sync.log", "w");
-    if(key == NULL || value == NULL) return -1;
-    char mes[4096] = {0};
-    int length = 0;
-    if(key != NULL && value != NULL && strlen(key) > 0 && strlen(value) > 0){
-        length = sprintf(mes, "key:%s---value:%s\r\n", key, value);
-    }
-
-
-    static int total_old_length = 0;
-    total_old_length += length;
-    if(old_mes == NULL){
-        origin_size = 5 * length;
-        old_mes = malloc(origin_size);
-        old_mes[0] = '\0';
-    }else if(total_old_length >= origin_size){
-        origin_size *= 2;
-        old_mes = realloc(old_mes, origin_size);
-    }
-
-    strcat(old_mes, mes);
-    return 0;
-}
-
-// ok
-int write_old_mes(void){
-    if(old_mes == NULL) return 0;
-    FILE *fp = fopen("./config/sync.log", "w");
-    if(fp == NULL)
-    {
-        perror("fopen sync.log failed");
-        return -1;
-    }
-    fputs(old_mes, fp);
-    fflush(fp);
-    fclose(fp);
-
-    old_mes = NULL;
-    
-    return 0;
-}
 
 // ok
 void kvs_txt_load(char *cmd, char *key, char *value){
@@ -1093,129 +1051,51 @@ void kvs_txt_load(char *cmd, char *key, char *value){
         kvs_skiplist_exist(globle_skiplist, key);
     }
 #endif
-    // save_old_mes(cmd, key, value);
-    // send_old_mes(cmd, key, value);
+
 }
 
 // ok
 // read requesies in a.txt
 void kvs_add_read(char *cmd, char *key, char *value){
-    FILE *fp = fopen("config/add.txt", "r");
-    if(fp == NULL){
+    int fd = open("config/add.txt", O_RDONLY);
+    if(fd == -1){
         perror("open a.txt");
         return;
     }
 
-    char buf[TXT_LENGTH] = {0}; 
-    int status = CMD;
-    int key_len = 0;
-    int value_len = 0;
-
-    while(fgets(buf, sizeof(buf), fp)){
-        if(buf[0] == '\n' || buf[0] == '\0') continue;
-
-        switch(status){
-            case CMD:
-                if(strncmp(buf,"key: ",5) == 0){
-                    strcat(key, buf + 5);
-                    cmd[strcspn(cmd,"\r\n")] = 0;
-                    status = KEY;
-                }else if(strncmp(buf,"key_len: ",9) == 0){
-                    sscanf(buf, "key_len: %d", &key_len);
-                }else{
-                    strcat(cmd, buf + 5);
-                }
-                break;
-            case KEY:
-                if(strncmp(buf,"value: ",7) == 0){
-                    strcat(value, buf + 7);
-                    status = VALUE;
-                }else if(strncmp(buf,"cmd: ",5) == 0){
-                    int len = strlen(key);
-                    if(len > 0 && strlen(key) >= len){
-                        key[len - 1] = '\0';
-                    }
-                    cmd[strcspn(cmd,"\r\n")]=0;
-                    kvs_txt_load(cmd, key, value);
-                    if(cfg.add_save == 1){
-                        save_old_mes(cmd, key, value);
-                        
-                    }
-                    memset(cmd,0,TXT_LENGTH);
-                    memset(key,0,TXT_LENGTH);
-                    memset(value,0,TXT_LENGTH);
-                    strcat(cmd, buf + 5);
-                    key_len=0;
-                    value_len=0;
-                    status = CMD;
-
-                }else if(strncmp(buf,"value_len: ",11) == 0){
-                    sscanf(buf, "value_len: %d", &value_len);
-                }else{
-                    strcat(key, buf);
-                }
-                break;
-            case VALUE:
-
-                if(strncmp(buf,"cmd: ",5) == 0){
-                    int len = strlen(value);
-                    if(len > 0 && value[len] == '\n'){
-                        value[len] = '\0';
-                    }
-                    cmd[strcspn(cmd,"\r\n")]=0;
-                    if(key_len > 0 && strlen(key) >= key_len){
-                        key[key_len] = '\0';
-                    }
-
-                    if(value_len > 0 && strlen(value) >= value_len){
-                        value[value_len] = '\0';
-                    }
-                    kvs_txt_load(cmd, key, value);
-                    if(cfg.add_save == 1){
-                        save_old_mes(cmd, key, value);
-                    }
-                    memset(cmd,0,TXT_LENGTH);
-                    memset(key,0,TXT_LENGTH);
-                    memset(value,0,TXT_LENGTH);
-                    strcat(cmd, buf + 5);
-                    key_len = 0;
-                    value_len = 0;
-                    status = CMD;
-                }else{
-                    strcat(value, buf);
-                }
-                break;
-        }
-            
-        memset(buf, 0, strlen(buf));
+    struct stat st;
+    if(fstat(fd, &st) < 0){
+        perror("fstat error");
+        close(fd);
+        return ;
     }
-    if(strlen(key) > 0){
-        int len = key_len;
-        if(key_len > 0 && strlen(key) >= key_len){
-            key[key_len] = '\0';
-        }
+    off_t size = st.st_size;
+    if(size < 0){
+        perror("fstat size error");
+        close(fd);
+        return ;
     }
-    if(strlen(value) > 0){
-        int len = value_len;
-        if(value_len > 0 && strlen(value) >= value_len){
-            value[value_len] = '\0';
-        }
+    size_t len = st.st_size;
+    if(len == 0){
+        close(fd);
+        return;   
     }
-    if(strlen(cmd) > 0){
-        kvs_txt_load(cmd,key,value);
-        if(cfg.add_save == 1){
-            save_old_mes(cmd, key, value);
-            write_old_mes();
-        }
-        memset(cmd,0,TXT_LENGTH);
-        memset(key,0,TXT_LENGTH);
-        memset(value,0,TXT_LENGTH);
-        value_len=0;
-        status = KEY;
+    char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    if(addr == MAP_FAILED){
+        perror("mmap error");
+        return ;
     }
 
-///////////////-
-    fclose(fp);
+    char *p = addr;
+    char *end = addr + len;
+    
+    char *buf = m_malloc(len);
+    memcpy(buf, p, len);
+
+    char tmp = '0';
+    kvs_protocol(buf, len, &tmp);
+    munmap(addr, len);
+    close(fd);
 }
 
 // ok
@@ -1294,7 +1174,7 @@ void kvs_full_read(char *cmd, char *key, char *value){
         }
     }
     
-    
+    munmap(addr, len);
 }
 
 static int add_save_flag = 0;

@@ -258,16 +258,6 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg){
 
         while(node != NULL){
 
-            int key_len = strlen(node->key);
-            int value_len = strlen(node->value);
-
-            char tmp[256] = {0};
-
-            sprintf(tmp,"key_len: %d\r\nkey: %s\r\nvalue_len: %d\r\nvalue: %s\r\n",key_len,node->key,value_len,node->value
-            );
-
-            strcat(msg, tmp);
-
 			p += sprintf(p, "key_len: %d\r\nkey: ", node->key_len);
 			memcpy(p, node->key, node->key_len);
             p += node->key_len;
@@ -281,6 +271,6 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg){
         }
     }
 
-    return 0;
+    return p - msg;
 }
 

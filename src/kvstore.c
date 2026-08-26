@@ -74,6 +74,13 @@ enum {
 };
 
 static Config cfg;
+struct io_uring ring;
+struct io_uring_params params;
+uring_info u_info[1024];
+uring_info u_full_info;
+
+static int globle_add_fd = -1;
+static int globle_full_fd = -1;
 
 const char *response[] = {
 
@@ -261,7 +268,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 // hash
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
-            int ret = kvs_hash_set(globle_hash,key,value);
+            int ret = kvs_hash_set(globle_hash,key,value, *key_len, *value_len);
             if(ret < 0){
                 if(cfg.show_response == 1 || *response != '0') length = sprintf(response,"-ERR %s\r\n", "unknown command");
             }else{
@@ -270,7 +277,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_HGET:{
-            char *result = kvs_hash_get(globle_hash,key);
+            char *result = kvs_hash_get(globle_hash,key, *key_len, value_len);
             if(result == NULL){
                 if(cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
             }else{
@@ -279,7 +286,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_HDEL:{
-            ret = kvs_hash_del(globle_hash,key);
+            ret = kvs_hash_del(globle_hash,key, *key_len);
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
             }else if(ret == 0){
@@ -290,7 +297,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_HMOD:{
-            ret = kvs_hash_mod(globle_hash,key,value);
+            ret = kvs_hash_mod(globle_hash,key,value, *key_len, *value_len);
             if(ret < 0){
                 if(cfg.show_response == 1) length = sprintf(response,"-ERR internal error\r\n");
             }else if(ret == 0){
@@ -301,7 +308,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_HEXIST:
-            ret = kvs_hash_exist(globle_hash,key);
+            ret = kvs_hash_exist(globle_hash,key, *key_len);
             if(ret == 0){
                 if(cfg.show_response == 1) length = sprintf(response,":1\r\n");
             }else{
@@ -379,6 +386,8 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
     }
+
+    //  //////////////////////////////////////////////////////////////////
     
     *push_flag = 0;
     return length;
@@ -388,7 +397,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 // ok
 static int sync_flag = 0;
 int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *push_flag){
-    
+
     if(msg == NULL || tokens == NULL) return -1;
     char *tcopy = msg;
     int idx = 0;
@@ -474,18 +483,28 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         }
                         // mempool
                         if(cfg.use_mempool == 1){
-                            tokens[0] = m_malloc(cmd_len + 1);
+                            tokens[0] = m_malloc(cmd_len + 2);
                         }else{
-                            tokens[0] = malloc(cmd_len + 1);
+                            tokens[0] = malloc(cmd_len + 2);
                         }
-                        memcpy(tokens[0], &tcopy[i], cmd_len);
+                        char cmd_tmp[128] = {0};
+                        memcpy(cmd_tmp, &tcopy[i], cmd_len);
                         // if (tokens[0]) {
                         //     for(int k = 0; tokens[0][k]; k++) {
                         //         tokens[0][k] = toupper(tokens[0][k]);
                         //     }
                         // }
-                        tokens[0][cmd_len] = '\0';
-                        // printf("cmd:%s\n",tokens[0]);
+                        if(strncmp(cfg.storage_structure, "array", 5) == 0){
+                            sprintf(tokens[0], "%s", cmd_tmp);
+                        }else if(strncmp(cfg.storage_structure, "rbtree", 6) == 0){
+                            sprintf(tokens[0], "R%s", cmd_tmp);
+                            i++;
+                        }else if(strncmp(cfg.storage_structure, "hash", 4) == 0){
+                            sprintf(tokens[0], "H%s", cmd_tmp);
+                        }else if(strncmp(cfg.storage_structure, "skiptable", 9) == 0){
+                            sprintf(tokens[0], "S%s", cmd_tmp);
+                        }
+
                         i = i + cmd_len;
                         i += 2;
                         status = KEY;
@@ -527,7 +546,6 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     if(i + *key_len > length){
                         return 0; 
                     }
-
                     // mempoll
                     if(cfg.use_mempool == 1){
                         tokens[1] = m_malloc(*key_len + 1);
@@ -536,7 +554,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     }
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
-                    // printf("key:%s\n",tokens[1]);
+                    printf("key:%s\n",tokens[1]);
                     if(tokens[1] == "SYNC"){
                         sync_flag = 1;
                     }
@@ -611,10 +629,8 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
             }
         }
         //
-        // printf("enter");
         
         if(single_num > 0 && finish_single == single_num){
-            // printf("enter\n");
             // for(int k = 0; tokens[0][k]; k++){
             //     tokens[0][k] = toupper(tokens[0][k]);
             // }
@@ -703,7 +719,30 @@ void sync_mes_init(void) {
 }
 
 
-// ok
+int get_add_fd(void){
+    if(globle_add_fd < 0){
+        globle_add_fd = open("config/add.txt", O_WRONLY | O_APPEND);
+        if(globle_add_fd < 0){
+            perror("open failed");
+            return 0;
+        }
+    }
+    
+    return globle_add_fd;
+}
+
+int get_full_fd(void){
+    if(globle_full_fd < 0){
+        globle_full_fd = open("config/full.txt", O_WRONLY | O_APPEND);
+        if(globle_full_fd < 0){
+            perror("open failed");
+            return 0;
+        }
+    }
+    return globle_full_fd;
+}
+
+
 int kvs_protocol(char *msg, int length, char *response){
 
     int key_len = 0;
@@ -750,35 +789,28 @@ int kvs_protocol(char *msg, int length, char *response){
                 tmp = calloc(1, 1024 * 1024 * 5);
             }
             
-            FILE *fp_full = fopen("config/full.txt", "a+");
+            int full_fd = get_full_fd();
+            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&ring);
+            if (!sqe_full) {
+                perror("sqe_get failed");
+                return -1;
+            }
 
-            kvs_array_save(globle_array, tmp);
-            fputs(tmp, fp_full);
-            fflush(fp_full);
             memset(tmp, 0, 1024 * 1024 * 5);
 
-            kvs_skiplist_save(globle_skiplist, tmp);
-            fputs(tmp, fp_full);
-            fflush(fp_full);
-            memset(tmp, 0, 1024 * 1024 * 5);
-
-            int rbtree_length = kvs_rbtree_save(globle_rbtree, tmp);
-            fputs(tmp, fp_full);
-            fflush(fp_full);
-            memset(tmp, 0, 1024 * 1024 * 5);
-
+            u_full_info.fd = full_fd;
+            u_full_info.save_buf_ptr = tmp;
             int hash_length = kvs_hash_save(globle_hash, tmp);
-            fputs(tmp, fp_full);
-            fflush(fp_full);
-            memset(tmp, 0, 1024 * 1024 * 5);
+            io_uring_prep_write(sqe_full, full_fd, u_full_info.save_buf_ptr, hash_length, 0);
+            io_uring_sqe_set_data(sqe_full, &u_full_info);
 
 
-            fclose(fp_full);
+            io_uring_submit(&ring);
+
+            // fclose(fp_full);
 
             kvs_protocol_push(msg, strlen(msg));
-            if(cfg.use_mempool == 1){
-                m_reset();
-            }
+            
             return 0;
         }
 
@@ -895,23 +927,48 @@ int kvs_protocol(char *msg, int length, char *response){
 
     int total_response_len = 0;
 
+
     while (mes_len > 0) {
 
         int packet_len = kvs_is_complete(mes, mes_len);
         
-        // if (packet_len == 0) break;  
         if (packet_len == 0) break; 
 
         char single_cmd[4096] = {0};
         memcpy(single_cmd, mes, packet_len);
         single_cmd[packet_len] = '\0';
-
+        
         char single_response[BUFFER_LENGTH] = {0};
         char *tokens[3] = {NULL, NULL, NULL};
 
-        // printf("single_cmd:%s\n", single_cmd);
+        // memcpy(u_info[i].buffer, single_cmd, packet_len);
+
+        // printf("u_info[i].buffer:%s\n", u_info[i].buffer);
+
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
-        if(cfg.add_save == 1) kvs_add_save(single_cmd);
+
+
+        if(cfg.add_save == 1) {
+
+            int fd = get_add_fd();
+            struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+            if (!sqe) {
+                perror("sqe_get failed");
+                return -1;
+            }
+            static int i = 0;
+
+            u_info[i].idx = i;
+            u_info[i].fd = fd;
+            memcpy(u_info[i].buffer, single_cmd, packet_len);
+            io_uring_prep_write(sqe, fd, u_info[i].buffer, packet_len, 0);
+            io_uring_sqe_set_data(sqe, &u_info[i]);
+
+            io_uring_submit(&ring);
+
+            i++;
+            if (i >= 1024) i = 0;
+        }
         if(cfg.push_flag){
             kvs_protocol_push(single_cmd, count);
         }
@@ -932,6 +989,29 @@ int kvs_protocol(char *msg, int length, char *response){
     return total_response_len; 
     
     // return count;
+}
+
+
+void *uring_cqe_thread(void *argv){
+    while(1){
+        struct io_uring_cqe *cqe;
+        int u_ret = io_uring_wait_cqe(&ring, &cqe);
+        if(u_ret == 0){
+            struct uring_info *info = io_uring_cqe_get_data(cqe);
+
+            if(info == &u_full_info){
+                if(cfg.use_mempool == 1){
+                    m_reset();
+                }else {
+                    free(info->save_buf_ptr);
+                }
+                info->save_buf_ptr = NULL;
+            }
+            int id = info->idx;
+            memset(u_info[id].buffer, 0, sizeof(u_info[id].buffer));
+            io_uring_cqe_seen(&ring, cqe);
+        }
+    }
 }
 
 
@@ -987,7 +1067,7 @@ kvs_hash_destory(globle_hash);
 #if ENABLE_SKIPTABLE
 free(globle_skiplist);
 kvs_skiplist_destroy(globle_skiplist);
-
+close(globle_add_fd);
 #endif
 }
 
@@ -997,7 +1077,7 @@ int origin_size = 0;
 static char *old_mes = NULL;
 
 // ok
-void kvs_txt_load(char *cmd, char *key, char *value){
+void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len){
     printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
 #if ENABLE_ARRAY
     if(strcmp(cmd,"SET") == 0){
@@ -1027,15 +1107,15 @@ void kvs_txt_load(char *cmd, char *key, char *value){
 #endif
 #if ENABLE_HASH
     if(strcmp(cmd,"HSET") == 0){
-        kvs_hash_set(globle_hash, key, value);
+        kvs_hash_set(globle_hash, key, value, key_len, value_len);
     }else if(strcmp(cmd,"HDEL") == 0){
-        kvs_hash_del(globle_hash, key);
+        kvs_hash_del(globle_hash, key, key_len);
     }else if(strcmp(cmd,"HMOD") == 0){
-        kvs_hash_mod(globle_hash, key, value);
+        kvs_hash_mod(globle_hash, key, value, key_len, value_len);
     }else if(strcmp(cmd,"HGET") == 0){
-        kvs_hash_get(globle_hash, key);
+        kvs_hash_get(globle_hash, key, key_len, &value_len);
     }else if(strcmp(cmd,"HEXIST") == 0){
-        kvs_hash_exist(globle_hash, key);
+        kvs_hash_exist(globle_hash, key, key_len);
     }
 #endif
 #if ENABLE_SKIPTABLE
@@ -1062,6 +1142,8 @@ void kvs_add_read(char *cmd, char *key, char *value){
         perror("open a.txt");
         return;
     }
+
+    cfg.add_save = 0;
 
     struct stat st;
     if(fstat(fd, &st) < 0){
@@ -1170,7 +1252,7 @@ void kvs_full_read(char *cmd, char *key, char *value){
             }else if(strncmp(cfg.storage_structure, "skiptable", 9) == 0){
                 cmd = "SSET";
             }
-            kvs_txt_load(cmd, key, value);
+            kvs_txt_load(cmd, key, value, key_len, value_len);
         }
     }
     
@@ -1178,12 +1260,15 @@ void kvs_full_read(char *cmd, char *key, char *value){
 }
 
 static int add_save_flag = 0;
-
+static pthread_t pid;
 int main(int argc, char const *argv[])
 {
     // if(argc != 3) return -1;
 
-     
+    memset(&params, 0, sizeof(params));
+
+    io_uring_queue_init_params(1024, &ring, &params);
+
     load_config("config/server.conf", &cfg);
     
     init_kvs();
@@ -1196,7 +1281,8 @@ int main(int argc, char const *argv[])
         if(cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
         }
-        
+        cfg.add_save = 1;
+        pthread_create(&pid, NULL, uring_cqe_thread, NULL);
         reactor_start(cfg.port,kvs_protocol);
     }else if(cfg.mode == 2){
         

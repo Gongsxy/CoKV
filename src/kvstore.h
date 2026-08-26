@@ -16,6 +16,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include <pthread.h>
+
+
 // #include "server.h"
 
 #define RED				1
@@ -61,9 +64,12 @@ extern struct fd_info *fd_list;
 
 int check_fd_to_ip(int fd, char *ip);
 
-typedef struct son_conn{
-	int fd[FD_MAX];
-} connection;
+typedef struct uring_info{
+	int fd;
+	int idx;
+	char buffer[1024];
+	char *save_buf_ptr;
+} uring_info;
 // connection son;
 
 int kvs_protocol(char *msg, int length, char *response);
@@ -158,6 +164,8 @@ typedef struct hashnode_s {
 	char key[MAX_KEY_LEN];
 	char value[MAX_VALUE_LEN];
 #endif
+	int key_len;      
+    int value_len;
 	struct hashnode_s *next;
 	
 } hashnode_t;
@@ -175,14 +183,15 @@ typedef struct hashtable_s {
 typedef struct hashtable_s kvs_hash_t;
 extern kvs_hash_t *globle_hash;
 
+
 int kvs_hash_create(kvs_hash_t *hash);
 void kvs_hash_destory(kvs_hash_t *hash);
-int kvs_hash_set(kvs_hash_t *hash, char *key, char *value);
-char * kvs_hash_get(kvs_hash_t *hash, char *key);
+int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len);
+char * kvs_hash_get(kvs_hash_t *hash, char *key, int key_len, int *value_len);
 int kvs_hash_count(kvs_hash_t *hash);
-int kvs_hash_del(kvs_hash_t *hash, char *key);
-int kvs_hash_exist(kvs_hash_t *hash, char *key);
-int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value);
+int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len);
+int kvs_hash_exist(kvs_hash_t *hash, char *key, int key_len);
+int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len);
 
 #endif
 
@@ -245,7 +254,7 @@ int kvs_txt_mod(char *cmd, char* key, char* value, int *key_len, int *value_len)
 char * kvs_txt_get(char *cmd, char* key, int *key_len);
 
 void kvs_txt_read(char *cmd, char *key, char *value);
-void kvs_txt_load(char *cmd, char *key, char *value);
+void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len);
 void kvs_txt_full_load(char *msg);
 int kvs_add_save(char *msg);
 

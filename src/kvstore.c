@@ -3,6 +3,7 @@
 #include "kvstore.h"
 #include "server.h"
 #include "load_conf.h"
+#include "uring_slot.h"
 
 #if 1
 kvs_array_t *globle_array = NULL;
@@ -27,7 +28,7 @@ const char *command[] = {
     "RSET","RGET","RDEL","RMOD","REXIST",
     "HSET","HGET","HDEL","HMOD","HEXIST",
     "SSET","SGET","SDEL","SMOD","SEXIST",
-    "SYNC","PING","QUIT","INFO"
+    "SYNC","PING","QUIT","INFO","SAVE"
 };
 
 const char *key_value_command[] = {
@@ -64,6 +65,7 @@ enum {
     KVS_CMD_PING,
     KVS_CMD_QUIT,
     KVS_CMD_INFO,
+    KVS_CMD_SAVE,
     KVS_CMD_COUNT
 };
 
@@ -74,8 +76,10 @@ enum {
 };
 
 static Config cfg;
-struct io_uring ring;
-struct io_uring_params params;
+struct io_uring add_ring;
+struct io_uring full_ring;
+struct io_uring_params add_params;
+struct io_uring_params full_params;
 uring_info u_info[1024];
 uring_info u_full_info;
 
@@ -115,6 +119,105 @@ static char *sync_mes = NULL;
 static int   sync_mes_cap = 0;
 static int   sync_mes_len = 0;
 
+void *uring_add_cqe_thread(void *argv){
+    while(1){
+        struct io_uring_cqe *cqe;
+        int u_ret = io_uring_wait_cqe(&add_ring, &cqe);
+        if(u_ret == 0){
+            struct uring_info *info = io_uring_cqe_get_data(cqe);
+            if(info){
+                memset(info->buffer, 0, sizeof(u_info->buffer));
+                u_info_free(info);
+            }
+
+            io_uring_cqe_seen(&add_ring, cqe);
+            
+        }
+    }
+}
+
+
+void *uring_full_cqe_thread(void *argv){
+#if 0
+    while(1){
+        struct io_uring_cqe *cqe;
+        int u_ret = io_uring_wait_cqe(&full_ring, &cqe);
+        if(u_ret == 0){
+            struct uring_info *info = io_uring_cqe_get_data(cqe);
+
+            if (cqe->res < 0) {
+                printf("write error: %s\n", strerror(-cqe->res));
+            } else {
+                printf("write %d bytes\n", cqe->res);
+                fsync(info->fd);  // Ç¿ÖÆË¢ÅÌ
+            }
+            
+            if(cfg.use_mempool == 1){
+                m_reset();
+            }else {
+                free(info->save_buf_ptr);
+            }
+                info->save_buf_ptr = NULL;
+            
+            
+            io_uring_cqe_seen(&full_ring, cqe);
+            
+        }
+    }
+#else
+
+    while (1) {
+            struct io_uring_cqe *cqe;
+            int u_ret = io_uring_wait_cqe(&full_ring, &cqe);
+            if (u_ret == 0) {
+                struct uring_info *info = io_uring_cqe_get_data(cqe);
+
+                printf("FULL CQE: res=%d fd=%d\n", cqe->res, info ? info->fd : -1);
+
+                if (cqe->res < 0) {
+                    printf("FULL write error: %s\n", strerror(-cqe->res));
+                } else {
+                    printf("FULL write %d bytes\n", cqe->res);
+                    if (info) fsync(info->fd);
+                }
+
+                if (info) {
+                    free(info->save_buf_ptr);
+                    info->save_buf_ptr = NULL;
+                    free(info);
+                }
+                io_uring_cqe_seen(&full_ring, cqe);
+            }
+        }
+
+#endif
+}
+
+
+
+int get_add_fd(void){
+    if(globle_add_fd < 0){
+        globle_add_fd = open("config/add.txt", O_WRONLY | O_APPEND);
+        if(globle_add_fd < 0){
+            perror("open failed");
+            return -1;
+        }
+    }
+    
+    return globle_add_fd;
+}
+
+int get_full_fd(void){
+    if(globle_full_fd < 0){
+        globle_full_fd = open("config/full.txt", O_WRONLY | O_APPEND);
+        if(globle_full_fd < 0){
+            perror("open failed");
+            return -1;
+        }
+    }
+    return globle_full_fd;
+}
+
 
 int is_number(char *msg){//1 true 0 false 
 	if(msg == NULL) return 0;
@@ -137,8 +240,10 @@ int is_number(char *msg){//1 true 0 false
 // ok
 int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
     if(tokens == NULL || response == NULL) return -1;
-    
-    // printf("tokens:%s\n%s\n%s\n",tokens[0], tokens[1], tokens[2]);
+
+    if(!(strncmp(tokens[0], "HSET", 4) == 0)){
+        printf("tokens[0]:%s\n",tokens[0]);
+    }
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
         if(strcmp(tokens[0],command[i]) == 0){
@@ -381,13 +486,130 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
             break;
         }
+        case KVS_CMD_SAVE:{
+
+#if 0
+            char *tmp = NULL;
+            // if(cfg.use_mempool == 1){
+            //     tmp = malloc(1024 * 1024 * 5);
+            //     if(tmp) memset(tmp, 0, 1024 * 1024 * 5);
+            // }else {
+                tmp = calloc(1, 1024 * 1024 * 5);
+            // }
+            
+            int full_fd = get_full_fd();
+            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
+            
+            if (!sqe_full) {
+                perror("sqe_get failed");
+                return -1;
+            }
+
+            memset(tmp, 0, 1024 * 1024 * 5);
+
+            struct uring_info *full_info = calloc(1, sizeof(*full_info));
+            // globle_full_fd = get_full_fd();
+            full_info->save_buf_ptr = tmp;
+
+
+            int hash_length = kvs_hash_save(globle_hash, tmp);
+            
+            io_uring_prep_write(sqe_full, globle_full_fd, full_info->save_buf_ptr, hash_length, 0);
+            io_uring_sqe_set_data(sqe_full, full_info);
+
+            printf("after kvs_hash_save, len=%d\n", hash_length);
+
+printf("before full submit\n");
+            
+            io_uring_submit(&full_ring);
+printf("after full submit\n");
+
+printf("========== SAVE SUBMIT ==========\n");
+            break;
+#else
+
+            int full_fd = get_full_fd();
+            if (full_fd < 0) {
+                length = sprintf(response, "-ERR open full file failed\r\n");
+                break;
+            }
+
+            char *tmp = calloc(1, 1024 * 1024 * 5);
+            if (!tmp) {
+                length = sprintf(response, "-ERR out of memory\r\n");
+                close(full_fd);
+                break;
+            }
+
+            int hash_length = kvs_hash_save(globle_hash, tmp);
+
+            if (hash_length <= 0) {
+                close(full_fd);
+                free(tmp);
+                length = sprintf(response, "+OK\r\n");
+                break;
+            }
+
+            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
+            if (!sqe_full) {
+                close(full_fd);
+                free(tmp);
+                length = sprintf(response, "-ERR save busy\r\n");
+                break;
+            }
+
+            struct uring_info *full_info = calloc(1, sizeof(*full_info));
+            full_info->save_buf_ptr = tmp;
+            full_info->fd = full_fd;
+
+            io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length, 0);
+            io_uring_sqe_set_data(sqe_full, full_info);
+
+            int sub_ret = io_uring_submit(&full_ring);
+            if (sub_ret < 0) {
+                free(full_info->save_buf_ptr);
+                free(full_info);
+                close(full_fd);
+
+                length = sprintf(response, "-ERR submit failed\r\n");
+                break;
+            }
+
+            struct io_uring_cqe *cqe;
+            int wait_ret = io_uring_wait_cqe(&full_ring, &cqe);
+            if (wait_ret == 0) {
+                struct uring_info *info = io_uring_cqe_get_data(cqe);
+
+                if (cqe->res < 0) {
+                    length = sprintf(response, "-ERR save failed\r\n");
+                } else {
+                    fsync(full_fd);
+                    length = sprintf(response, "+OK\r\n");
+                }
+
+                if (info) {
+                    free(info->save_buf_ptr);
+                    free(info);
+                }
+                io_uring_cqe_seen(&full_ring, cqe);
+                close(full_fd);
+            } else {
+                close(full_fd);
+                free(tmp);
+                free(full_info);
+                length = sprintf(response, "-ERR save failed\r\n");
+            }
+
+            break;
+     
+#endif
+        }
         default:{
             if(cfg.show_response == 1) length = sprintf(response,"-ERR unknown command '%s'\r\n", tokens[0]);
             break;
         }
     }
 
-    //  //////////////////////////////////////////////////////////////////
     
     *push_flag = 0;
     return length;
@@ -494,7 +716,9 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         //         tokens[0][k] = toupper(tokens[0][k]);
                         //     }
                         // }
-                        if(strncmp(cfg.storage_structure, "array", 5) == 0){
+                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "SYNC") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0){
+                            sprintf(tokens[0], "%s", cmd_tmp);
+                        }else if(strncmp(cfg.storage_structure, "array", 5) == 0){
                             sprintf(tokens[0], "%s", cmd_tmp);
                         }else if(strncmp(cfg.storage_structure, "rbtree", 6) == 0){
                             sprintf(tokens[0], "R%s", cmd_tmp);
@@ -554,7 +778,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     }
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
-                    printf("key:%s\n",tokens[1]);
+                    // printf("key:%s\n",tokens[1]);
                     if(tokens[1] == "SYNC"){
                         sync_flag = 1;
                     }
@@ -631,10 +855,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
         //
         
         if(single_num > 0 && finish_single == single_num){
-            // for(int k = 0; tokens[0][k]; k++){
-            //     tokens[0][k] = toupper(tokens[0][k]);
-            // }
-
+            
             int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len, push_flag);
             resp_len += len;
 
@@ -719,30 +940,6 @@ void sync_mes_init(void) {
 }
 
 
-int get_add_fd(void){
-    if(globle_add_fd < 0){
-        globle_add_fd = open("config/add.txt", O_WRONLY | O_APPEND);
-        if(globle_add_fd < 0){
-            perror("open failed");
-            return 0;
-        }
-    }
-    
-    return globle_add_fd;
-}
-
-int get_full_fd(void){
-    if(globle_full_fd < 0){
-        globle_full_fd = open("config/full.txt", O_WRONLY | O_APPEND);
-        if(globle_full_fd < 0){
-            perror("open failed");
-            return 0;
-        }
-    }
-    return globle_full_fd;
-}
-
-
 int kvs_protocol(char *msg, int length, char *response){
 
     int key_len = 0;
@@ -778,43 +975,6 @@ int kvs_protocol(char *msg, int length, char *response){
         if(in == 0) return 0;
     }
 
-    if(cfg.full_save_flag == 1){
-        if(strcmp(msg, "save\n") == 0){
-
-            char *tmp = NULL;
-            if(cfg.use_mempool == 1){
-                tmp = m_malloc(1024 * 1024 * 5);
-                if(tmp) memset(tmp, 0, 1024 * 1024 * 5);
-            }else {
-                tmp = calloc(1, 1024 * 1024 * 5);
-            }
-            
-            int full_fd = get_full_fd();
-            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&ring);
-            if (!sqe_full) {
-                perror("sqe_get failed");
-                return -1;
-            }
-
-            memset(tmp, 0, 1024 * 1024 * 5);
-
-            u_full_info.fd = full_fd;
-            u_full_info.save_buf_ptr = tmp;
-            int hash_length = kvs_hash_save(globle_hash, tmp);
-            io_uring_prep_write(sqe_full, full_fd, u_full_info.save_buf_ptr, hash_length, 0);
-            io_uring_sqe_set_data(sqe_full, &u_full_info);
-
-
-            io_uring_submit(&ring);
-
-            // fclose(fp_full);
-
-            kvs_protocol_push(msg, strlen(msg));
-            
-            return 0;
-        }
-
-    }
 
 
     if(strncmp(msg, "SYNC\n", 5) == 0){
@@ -931,7 +1091,6 @@ int kvs_protocol(char *msg, int length, char *response){
     while (mes_len > 0) {
 
         int packet_len = kvs_is_complete(mes, mes_len);
-        
         if (packet_len == 0) break; 
 
         char single_cmd[4096] = {0};
@@ -941,17 +1100,14 @@ int kvs_protocol(char *msg, int length, char *response){
         char single_response[BUFFER_LENGTH] = {0};
         char *tokens[3] = {NULL, NULL, NULL};
 
-        // memcpy(u_info[i].buffer, single_cmd, packet_len);
-
-        // printf("u_info[i].buffer:%s\n", u_info[i].buffer);
 
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
-
 
         if(cfg.add_save == 1) {
 
             int fd = get_add_fd();
-            struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+            struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
+#if 0
             if (!sqe) {
                 perror("sqe_get failed");
                 return -1;
@@ -963,11 +1119,43 @@ int kvs_protocol(char *msg, int length, char *response){
             memcpy(u_info[i].buffer, single_cmd, packet_len);
             io_uring_prep_write(sqe, fd, u_info[i].buffer, packet_len, 0);
             io_uring_sqe_set_data(sqe, &u_info[i]);
-
-            io_uring_submit(&ring);
-
+// printf("[ADD] before submit idx=%d\n", i);
+            io_uring_submit(&add_ring);
+// printf("[ADD] after submit idx=%d\n", i);
             i++;
-            if (i >= 1024) i = 0;
+            if (i >= 1024) {
+printf("!!!!!!!! u_info exhausted !!!!!!!!\n");
+printf("submit_count=%d\n", i);
+printf("RETURN FROM ADD\n");
+return 0;
+            }
+#else
+
+            if (!sqe) {
+                fprintf(stderr, "add_ring sqe unavailable, skip add persistence\n");
+            } else {
+                uring_info *slot = u_info_alloc();
+                if (!slot) {
+
+                    do {
+                        io_uring_submit(&add_ring);
+                        struct io_uring_cqe *cqe;
+                        if (io_uring_wait_cqe(&add_ring, &cqe) == 0) {
+                            struct uring_info *done = io_uring_cqe_get_data(cqe);
+                            if (done) u_info_free(done);
+                            io_uring_cqe_seen(&add_ring, cqe);
+                        }
+                        slot = u_info_alloc();
+                    } while (!slot);
+                }
+
+            slot->fd = fd;
+            memcpy(slot->buffer, single_cmd, packet_len);
+            io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
+            io_uring_sqe_set_data(sqe, slot);
+            io_uring_submit(&add_ring);
+         }
+#endif
         }
         if(cfg.push_flag){
             kvs_protocol_push(single_cmd, count);
@@ -989,29 +1177,6 @@ int kvs_protocol(char *msg, int length, char *response){
     return total_response_len; 
     
     // return count;
-}
-
-
-void *uring_cqe_thread(void *argv){
-    while(1){
-        struct io_uring_cqe *cqe;
-        int u_ret = io_uring_wait_cqe(&ring, &cqe);
-        if(u_ret == 0){
-            struct uring_info *info = io_uring_cqe_get_data(cqe);
-
-            if(info == &u_full_info){
-                if(cfg.use_mempool == 1){
-                    m_reset();
-                }else {
-                    free(info->save_buf_ptr);
-                }
-                info->save_buf_ptr = NULL;
-            }
-            int id = info->idx;
-            memset(u_info[id].buffer, 0, sizeof(u_info[id].buffer));
-            io_uring_cqe_seen(&ring, cqe);
-        }
-    }
 }
 
 
@@ -1065,10 +1230,12 @@ kvs_hash_destory(globle_hash);
 #endif
 
 #if ENABLE_SKIPTABLE
-free(globle_skiplist);
 kvs_skiplist_destroy(globle_skiplist);
+free(globle_skiplist);
 close(globle_add_fd);
+close(globle_full_fd);
 #endif
+m_reset();
 }
 
 
@@ -1260,14 +1427,17 @@ void kvs_full_read(char *cmd, char *key, char *value){
 }
 
 static int add_save_flag = 0;
-static pthread_t pid;
-int main(int argc, char const *argv[])
-{
+static pthread_t add_pid;
+static pthread_t full_pid;
+int main(int argc, char const *argv[]){
     // if(argc != 3) return -1;
+    signal(SIGPIPE, SIG_IGN);
+    memset(&add_params, 0, sizeof(add_params));
+    memset(&full_params, 0, sizeof(full_params));
 
-    memset(&params, 0, sizeof(params));
-
-    io_uring_queue_init_params(1024, &ring, &params);
+    u_info_pool_init();
+    io_uring_queue_init_params(1024, &add_ring, &add_params);
+    io_uring_queue_init_params(1024, &full_ring, &full_params);
 
     load_config("config/server.conf", &cfg);
     
@@ -1282,8 +1452,10 @@ int main(int argc, char const *argv[])
             kvs_full_read(cmd, key, value);
         }
         cfg.add_save = 1;
-        pthread_create(&pid, NULL, uring_cqe_thread, NULL);
-        reactor_start(cfg.port,kvs_protocol);
+        pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
+        // pthread_create(&full_pid, NULL, uring_full_cqe_thread, NULL);
+        // reactor_start(cfg.port,kvs_protocol);
+        ntyco_start(cfg.port);
     }else if(cfg.mode == 2){
         
         if(cfg.add_save == 1) kvs_add_read(cmd, key, value);

@@ -64,12 +64,6 @@ extern struct fd_info *fd_list;
 
 int check_fd_to_ip(int fd, char *ip);
 
-typedef struct uring_info{
-	int fd;
-	int idx;
-	char buffer[1024];
-	char *save_buf_ptr;
-} uring_info;
 // connection son;
 
 int kvs_protocol(char *msg, int length, char *response);
@@ -130,6 +124,7 @@ typedef struct ksv_array_s{
 
 int reactor_start(unsigned short port, msg_handle hand);
 int proactor_start(unsigned short port, msg_handle handle);
+int ntyco_start(int port);
 
 
 void *kvs_malloc(size_t size);

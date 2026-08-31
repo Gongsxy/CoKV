@@ -2,12 +2,14 @@ CC = gcc
 
 SRC_DIR = src
 SRC_SLAVE = slave
+SRC_NtyCo = NtyCo/core
 OBJ_DIR = build
 BIN = kvstore 
 OUTPUT_DIR = ./build
 
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
 SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
+SOURCES_Ntyco = $(wildcard $(SRC_NtyCo)/*.c)
 OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 TARGET = kvstore
 
@@ -27,7 +29,7 @@ JEM = ./testcase/testcase_stdin.c src/mempool.c
 # SRC_SERVER_SLAVE = slave/
 
 all:
-	$(CC) -g -I$(SRC_DIR) -o $(TARGET) $(SOURCES) -luring
+	$(CC) -g -I$(SRC_DIR) -o $(TARGET) $(SOURCES) $(SOURCES_Ntyco) -luring -pthread -ldl
 
 testcase_add:
 	$(CC) -o $(TARGET_ADD) $(SRC_ADD)

@@ -18,6 +18,7 @@
 
 #include <pthread.h>
 
+#include "load_conf.h"
 
 // #include "server.h"
 
@@ -108,6 +109,7 @@ int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
 
 #if  ENABLE_ARRAY
 typedef int(*msg_handle)(char *msg, int length, char *response);
+int kvs_protocol(char *msg, int length, char *response);
 
 typedef struct kvs_array_items_s{
     char *key;
@@ -124,7 +126,7 @@ typedef struct ksv_array_s{
 
 int reactor_start(unsigned short port, msg_handle hand);
 int proactor_start(unsigned short port, msg_handle handle);
-int ntyco_start(int port);
+int ntyco_start(Config *server_cfg);
 
 
 void *kvs_malloc(size_t size);

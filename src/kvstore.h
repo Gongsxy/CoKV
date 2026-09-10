@@ -19,6 +19,7 @@
 #include <pthread.h>
 
 #include "load_conf.h"
+#include "rdma.h"
 
 // #include "server.h"
 
@@ -126,7 +127,7 @@ typedef struct ksv_array_s{
 
 int reactor_start(unsigned short port, msg_handle hand);
 int proactor_start(unsigned short port, msg_handle handle);
-int ntyco_start(Config *server_cfg);
+int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma);
 
 
 void *kvs_malloc(size_t size);

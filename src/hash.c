@@ -200,32 +200,31 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len) {
 }
 
 int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len){
-	if (!hash || !key || key_len < 0 || !value || value_len < 0) return -2;
+    if (!hash || !key || key_len < 0 || !value || value_len < 0) return -2;
 
     int idx = _hash(key, key_len, hash->max_slots);
     if (idx < 0) return -2;
 
-	hashnode_t *node = hash->nodes[idx];
+    hashnode_t *node = hash->nodes[idx];
 
-	while (node != NULL) {
-		if (node->key_len == key_len && memcmp(node->key, key, key_len) == 0) {
+    while (node != NULL) {
+        if (node->key_len == key_len && memcmp(node->key, key, key_len) == 0) {
             break;
         }
         node = node->next;
-	}
+    }
 
-	if (!node) return 1;
+    if (!node) return 1;
 
-	kvs_free(node->value);
+    free(node->value);   // 只释放一次
 
-	char *new_value = (char *)malloc(value_len);
+    char *new_value = (char *)malloc(value_len);
     if (!new_value) return -2;
     memcpy(new_value, value, value_len);
-	
-	free(node->value);
+
     node->value = new_value;
     node->value_len = value_len;
-	return 0;
+    return 0;
 }
 
 int kvs_hash_exist(kvs_hash_t *hash, char *key, int key_len) {

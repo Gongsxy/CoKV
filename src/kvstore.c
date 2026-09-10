@@ -2,6 +2,7 @@
 #include "server.h"
 #include "load_conf.h"
 #include "uring_slot.h"
+#include "rdma.h"
 
 #include <signal.h>
 
@@ -83,6 +84,10 @@ struct io_uring_params full_params;
 uring_info u_info[1024];
 uring_info u_full_info;
 
+
+static __g_rdma gr = {0};
+
+
 static int globle_add_fd = -1;
 static int globle_full_fd = -1;
 
@@ -138,59 +143,31 @@ void *uring_add_cqe_thread(void *argv){
 
 
 void *uring_full_cqe_thread(void *argv){
-#if 0
-    while(1){
-        struct io_uring_cqe *cqe;
-        int u_ret = io_uring_wait_cqe(&full_ring, &cqe);
-        if(u_ret == 0){
-            struct uring_info *info = io_uring_cqe_get_data(cqe);
-
-            if (cqe->res < 0) {
-                printf("write error: %s\n", strerror(-cqe->res));
-            } else {
-                printf("write %d bytes\n", cqe->res);
-                fsync(info->fd);  // ??
-            }
-            
-            if(cfg.use_mempool == 1){
-                m_reset();
-            }else {
-                free(info->save_buf_ptr);
-            }
-                info->save_buf_ptr = NULL;
-            
-            
-            io_uring_cqe_seen(&full_ring, cqe);
-            
-        }
-    }
-#else
 
     while (1) {
-            struct io_uring_cqe *cqe;
-            int u_ret = io_uring_wait_cqe(&full_ring, &cqe);
-            if (u_ret == 0) {
-                struct uring_info *info = io_uring_cqe_get_data(cqe);
+        struct io_uring_cqe *cqe;
+        int u_ret = io_uring_wait_cqe(&full_ring, &cqe);
+        if (u_ret == 0) {
+            struct uring_info *info = io_uring_cqe_get_data(cqe);
 
-                printf("FULL CQE: res=%d fd=%d\n", cqe->res, info ? info->fd : -1);
+            printf("FULL CQE: res=%d fd=%d\n", cqe->res, info ? info->fd : -1);
 
-                if (cqe->res < 0) {
-                    printf("FULL write error: %s\n", strerror(-cqe->res));
-                } else {
-                    printf("FULL write %d bytes\n", cqe->res);
-                    if (info) fsync(info->fd);
-                }
-
-                if (info) {
-                    free(info->save_buf_ptr);
-                    info->save_buf_ptr = NULL;
-                    free(info);
-                }
-                io_uring_cqe_seen(&full_ring, cqe);
+            if (cqe->res < 0) {
+                printf("FULL write error: %s\n", strerror(-cqe->res));
+            } else {
+                printf("FULL write %d bytes\n", cqe->res);
+                if (info) fsync(info->fd);
             }
-        }
 
-#endif
+            if (info) {
+                free(info->save_buf_ptr);
+                info->save_buf_ptr = NULL;
+                free(info);
+            }
+            io_uring_cqe_seen(&full_ring, cqe);
+        }
+    }
+
 }
 
 
@@ -488,46 +465,6 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
         case KVS_CMD_SAVE:{
 
-#if 0
-            char *tmp = NULL;
-            // if(cfg.use_mempool == 1){
-            //     tmp = malloc(1024 * 1024 * 5);
-            //     if(tmp) memset(tmp, 0, 1024 * 1024 * 5);
-            // }else {
-                tmp = calloc(1, 1024 * 1024 * 5);
-            // }
-            
-            int full_fd = get_full_fd();
-            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
-            
-            if (!sqe_full) {
-                perror("sqe_get failed");
-                return -1;
-            }
-
-            memset(tmp, 0, 1024 * 1024 * 5);
-
-            struct uring_info *full_info = calloc(1, sizeof(*full_info));
-            // globle_full_fd = get_full_fd();
-            full_info->save_buf_ptr = tmp;
-
-
-            int hash_length = kvs_hash_save(globle_hash, tmp);
-            
-            io_uring_prep_write(sqe_full, globle_full_fd, full_info->save_buf_ptr, hash_length, 0);
-            io_uring_sqe_set_data(sqe_full, full_info);
-
-            printf("after kvs_hash_save, len=%d\n", hash_length);
-
-printf("before full submit\n");
-            
-            io_uring_submit(&full_ring);
-printf("after full submit\n");
-
-printf("========== SAVE SUBMIT ==========\n");
-            break;
-#else
-
             int full_fd = get_full_fd();
             if (full_fd < 0) {
                 length = sprintf(response, "-ERR open full file failed\r\n");
@@ -602,7 +539,6 @@ printf("========== SAVE SUBMIT ==========\n");
 
             break;
      
-#endif
         }
         default:{
             if(server_cfg.show_response == 1) length = sprintf(response,"-ERR unknown command '%s'\r\n", tokens[0]);
@@ -1456,7 +1392,8 @@ int main(int argc, char const *argv[]){
         pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
         // pthread_create(&full_pid, NULL, uring_full_cqe_thread, NULL);
         // reactor_start(server_cfg.port,kvs_protocol);
-        ntyco_start(&server_cfg);
+        rdma_init(&gr);
+        ntyco_start(&server_cfg, &gr);
     }else if(server_cfg.mode == 2){
         
         if(server_cfg.add_save == 1) kvs_add_read(cmd, key, value);

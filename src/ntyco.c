@@ -18,6 +18,9 @@
 
 static Config cfg = {0};
 
+__g_rdma g_rdma = {0};
+__g_slave g_slave = {0};
+
 extern int kvs_protocol(char *msg, int length, char *response);
 
 int load_save_mes(){
@@ -39,6 +42,8 @@ int load_save_mes(){
 }
 
 size_t sync_mes_to_rdma(void){
+printf("[sync] enter\n");
+
     int fd = load_save_mes();
     if(fd <= 0){
         printf("don't choose load message that has saved\n");
@@ -46,6 +51,8 @@ size_t sync_mes_to_rdma(void){
     }
 
     off_t file_sz = lseek(fd, 0, SEEK_END);
+printf("[sync] file_sz=%ld buf=%p buf_size=%zu\n",
+                (long)file_sz, (void*)g_rdma.buf, g_rdma.buf_size);
     if(file_sz == (off_t)-1){
         perror("lseek end");
         close(fd);
@@ -64,15 +71,13 @@ size_t sync_mes_to_rdma(void){
 
     // 从磁盘读到master的rdma注册内存g_rdma.buf
     size_t total_read = 0;
+    off_t off = 0;
     while(total_read < (size_t)file_sz){
-        ssize_t ret = read(fd, g_rdma.buf + total_read, (size_t)file_sz - total_read);
-        if(ret < 0){
-            close(fd);
-            perror("read");
-            return -1;
-        }
+        ssize_t ret = pread(fd, g_rdma.buf + total_read, (size_t)file_sz - total_read, off);
+        if(ret < 0){close(fd); perror("pread"); return -1;}
         if(ret == 0) break; // eof
         total_read += ret;
+        
     }
     if (total_read != file_sz){
         perror("read snapshot fail");
@@ -80,10 +85,12 @@ size_t sync_mes_to_rdma(void){
     }
 
     close(fd);
+printf("[sync] read done %zu\n", total_read);
     return total_read;
 }
 
 int rdma_send_mes_to_slave(uint32_t length){
+
     if(g_slave.fd < 0){
         perror("tcp connection error");
         return -1;
@@ -114,7 +121,7 @@ int rdma_send_mes_to_slave(uint32_t length){
     while((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0){
     };
     if(n < 0 || wc.status != IBV_WC_SUCCESS){
-        perror("ibv poll cq error");
+        fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
         return -1;
     }
 
@@ -133,7 +140,7 @@ void rdma_handshake(void *arg){
 
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(9999);
+    addr.sin_port = htons(9998);
     addr.sin_addr.s_addr = INADDR_ANY;
 
     socklen_t len = sizeof(addr);
@@ -150,12 +157,17 @@ void rdma_handshake(void *arg){
         return ;
     }
 
+    printf("[master] ctx=%p qp=%p mr=%p gid_index=%d\n",
+                (void*)g_rdma.ctx, (void*)g_rdma.qp, (void*)g_rdma.mr, g_rdma.gid_index);
+
     int fd = nty_accept(listen_fd, (struct sockaddr *)&addr, &len);
+printf("[master] slave connected\n");
     if(fd < 0){
-        close(listen_fd);
+        nty_close(listen_fd);
         perror("nty accept error");
         return ;
     }
+    g_slave.fd = fd;
 
     struct {
         uint32_t qpn;
@@ -178,8 +190,10 @@ void rdma_handshake(void *arg){
     g_slave.remote_rkey = ntohl(remote_info.rkey);
     g_slave.remote_vaddr = be64toh(remote_info.vaddr);
 
+    g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
+
     union ibv_gid local_gid;
-    if(ibv_query_gid(g_rdma.ctx, 1, 0, &local_gid) != 0){
+    if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
         perror("ibv query gid error");
         return ;
     }
@@ -192,6 +206,7 @@ void rdma_handshake(void *arg){
 
     uint32_t local_psn;
     ssize_t r_ret = getrandom(&local_psn, sizeof(local_psn), 0);
+    local_psn &= 0xffffff;
     if (r_ret != sizeof(local_psn)) {
         perror("getrandom error"); 
         return ;
@@ -205,16 +220,25 @@ void rdma_handshake(void *arg){
         perror("nty send error");
         return ;
     }
-
-    rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn);
+printf("[master] local_info sent\n");
+    if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn, g_rdma.gid_index) != 0){ fprintf(stderr, "modify fail\n"); return ; }
+     printf("[master] modify ok\n");
 
     int sync_ret = sync_mes_to_rdma();
-    if(sync_ret < 0){
-        perror("sync message error");
-        return ;
+
+    if(sync_ret < 0){ perror("sync message error"); return ; }
+    printf("[master] snapshot %d bytes, posting write\n", sync_ret);
+
+    if(sync_ret > 0 && rdma_send_mes_to_slave((uint32_t)sync_ret) < 0){
+        fprintf(stderr, "rdma write fail\n"); 
     }
-    rdma_send_mes_to_slave((uint32_t)sync_ret);
-    rdma_notify_slave(sync_ret);
+    printf("[master] write completed\n");
+
+    if(rdma_notify_slave(&g_slave, (uint32_t)sync_ret) < 0){
+        fprintf(stderr, "notify fail\n"); return ;
+    }
+    printf("[master] notify sent\n");
+
     if(sync_ret < 0){
         perror("sync mes to slave error");
         return ;
@@ -222,9 +246,9 @@ void rdma_handshake(void *arg){
 
     char ack[4];
     nty_recv(fd, ack, 4, 0);
-
-    close(fd);
-    close(listen_fd);
+printf("[master] sync done, %d bytes\n", sync_ret);
+    nty_close(fd);
+    nty_close(listen_fd);
 
     return ;
 }
@@ -313,14 +337,15 @@ void accept_func(void *arg){
 }
 
 
-int ntyco_start(Config *server_cfg){
+int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     cfg = *server_cfg;
     nty_coroutine *co = NULL;
     int *p = calloc(1, sizeof(int));
     *p = cfg.port;
 
+    g_rdma = *g_m_rdma;
+
     nty_coroutine_create(&co, accept_func, p);
-    rdma_init();
     nty_coroutine_create(&co, rdma_handshake, p);
     nty_schedule_run();
     return 0;

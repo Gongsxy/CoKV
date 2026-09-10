@@ -99,6 +99,10 @@ int load_config(const char *filename, Config *cfg){
                 if(strcmp(mes, "load_old_mes") == 0){
                     cfg->load_old_mes = atoi(val);
                 }
+                if(strcmp(mes, "storage_structure") == 0){
+                    strncpy(cfg->storage_structure, val, sizeof(cfg->storage_structure) - 1);
+                    cfg->storage_structure[strcspn(cfg->storage_structure, "\r\n")] = '\0';
+                }
                 break;
             }
             case sync:{
@@ -120,7 +124,7 @@ int load_config(const char *filename, Config *cfg){
                 if(strcmp(mes, "push_flag") == 0){
                     cfg->push_flag = atoi(val);
                 }
-                if(strcmp(mes, "is_slave") == 0){
+                if(strcmp(mes, "is_salve") == 0){
                     cfg->is_slave = atoi(val);
                 }
                 if(strcmp(mes, "push_save_flag") == 0){

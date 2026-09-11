@@ -14,6 +14,7 @@
 
 #define G_RMDA_BUF_SIZE 1024 * 1024 * 5
 
+extern int full_save_to_resp(char *msg, uint32_t length, char *response);
 extern int kvs_protocol(char *msg, int length, char *response);
 
 Config cfg;
@@ -116,8 +117,13 @@ void rdma_handshake(void *arg)
         printf("[slave] buf content: %.*s\n", (int)transfer_len, g_rdma_slave.buf);
     }
     if(transfer_len != 0){
-        char *resp = calloc(1, 1024 * 1024 * 1);
-        kvs_protocol(g_rdma_slave.buf, transfer_len, resp);
+        char *resp_switch = calloc(1, 1024 * 1024 * 5);
+        int length = full_save_to_resp(g_rdma_slave.buf, transfer_len, resp_switch);
+        if(length){
+            int recv_length = kvs_protocol(resp_switch, length, res);
+        }else{
+            kvs_protocol(g_rdma_slave.buf, transfer_len, resp_switch);
+        }
     }
     uint32_t ack = htonl(1);
     nty_send(fd, &ack, sizeof(ack), 0);
@@ -153,7 +159,8 @@ void read_func(void *arg){
         if (recv_len <= 0) {
             break;
         }
-        int length = kvs_protocol(buf, recv_len, res);
+        int length = 0;
+        length = kvs_protocol(buf, recv_len, res);
         if (length > 0) nty_send(cli_fd, res, length, 0);
     }
 

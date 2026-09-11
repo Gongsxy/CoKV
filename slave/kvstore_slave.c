@@ -222,7 +222,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
     if(tokens == NULL || response == NULL) return -1;
 
     if(!(strncmp(tokens[0], "HSET", 4) == 0)){
-        printf("tokens[0]:%s\n",tokens[0]);
+        // printf("tokens[0]:%s\n",tokens[0]);
     }
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
@@ -1379,7 +1379,7 @@ int main(int argc, char const *argv[]){
     io_uring_queue_init_params(1024, &add_ring, &add_params);
     io_uring_queue_init_params(1024, &full_ring, &full_params);
 
-    load_config("config/server.conf", &server_cfg);
+    load_config("config/server_slave.conf", &server_cfg);
     
     init_kvs();
     char cmd[TXT_LENGTH] = {0};

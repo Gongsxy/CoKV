@@ -1377,7 +1377,6 @@ int main(int argc, char const *argv[]){
     io_uring_queue_init_params(1024, &full_ring, &full_params);
 
     load_config("config/server.conf", &server_cfg);
-    
     init_kvs();
     char cmd[TXT_LENGTH] = {0};
     char key[TXT_LENGTH] = {0};
@@ -1388,7 +1387,7 @@ int main(int argc, char const *argv[]){
         if(server_cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
         }
-        server_cfg.add_save = 1;
+        // server_cfg.add_save = 1;
         pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
         // pthread_create(&full_pid, NULL, uring_full_cqe_thread, NULL);
         // reactor_start(server_cfg.port,kvs_protocol);

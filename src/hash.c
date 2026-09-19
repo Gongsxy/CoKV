@@ -30,7 +30,7 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 	if (!node) return NULL;
 	
 	// node->key = kvs_malloc(strlen(key) + 1);
-	node->key = calloc(1, key_len);
+	node->key = calloc(1, key_len + 1);
 	if(!node->key) {
 		free(node);
 		return NULL;
@@ -40,7 +40,7 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 	node->key_len = key_len;
 	
 	// node->value = kvs_malloc(strlen(value) + 1);
-	node->value = calloc(1, value_len);
+	node->value = calloc(1, value_len + 1);
 	if(!node->value) {
 		free(node->key);
         free(node);
@@ -216,9 +216,9 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
 
     if (!node) return 1;
 
-    free(node->value);   // 只释放一次
+    free(node->value);  
 
-    char *new_value = (char *)malloc(value_len);
+    char *new_value = (char *)calloc(1, value_len + 1);
     if (!new_value) return -2;
     memcpy(new_value, value, value_len);
 

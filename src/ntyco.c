@@ -1,9 +1,3 @@
-
-
-
-
-
-
 #include "../NtyCo/core/nty_coroutine.h"
 #include <netinet/in.h>
 #include <sys/random.h>
@@ -11,15 +5,22 @@
 #include "kvstore.h"
 #include "rdma.h"
 #include "load_conf.h"
+#include "../libbpf-bootstrap/examples/c/resp_capture.h"
 
 
 #define ADD_FILENAME    "config/add.txt"
 #define FULL_FILENAME   "config/full.txt"
 
+
+char *write_command[] = {
+    "SET","MOD"
+};
+
+
 static Config cfg = {0};
 
 __g_rdma g_rdma = {0};
-__g_slave g_slave = {0};
+__g_slave g_slave = {.fd = -1};
 
 extern int kvs_protocol(char *msg, int length, char *response);
 
@@ -42,7 +43,6 @@ int load_save_mes(){
 }
 
 size_t sync_mes_to_rdma(void){
-printf("[sync] enter\n");
 
     int fd = load_save_mes();
     if(fd <= 0){
@@ -51,8 +51,6 @@ printf("[sync] enter\n");
     }
 
     off_t file_sz = lseek(fd, 0, SEEK_END);
-printf("[sync] file_sz=%ld buf=%p buf_size=%zu\n",
-                (long)file_sz, (void*)g_rdma.buf, g_rdma.buf_size);
     if(file_sz == (off_t)-1){
         perror("lseek end");
         close(fd);
@@ -85,7 +83,7 @@ printf("[sync] file_sz=%ld buf=%p buf_size=%zu\n",
     }
 
     close(fd);
-printf("[sync] read done %zu\n", total_read);
+// printf("[sync] read done %zu\n", total_read);
     return total_read;
 }
 
@@ -157,11 +155,8 @@ void rdma_handshake(void *arg){
         return ;
     }
 
-    printf("[master] ctx=%p qp=%p mr=%p gid_index=%d\n",
-                (void*)g_rdma.ctx, (void*)g_rdma.qp, (void*)g_rdma.mr, g_rdma.gid_index);
 
     int fd = nty_accept(listen_fd, (struct sockaddr *)&addr, &len);
-printf("[master] slave connected\n");
     if(fd < 0){
         nty_close(listen_fd);
         perror("nty accept error");
@@ -220,24 +215,21 @@ printf("[master] slave connected\n");
         perror("nty send error");
         return ;
     }
-printf("[master] local_info sent\n");
+
     if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn, g_rdma.gid_index) != 0){ fprintf(stderr, "modify fail\n"); return ; }
-     printf("[master] modify ok\n");
+
 
     int sync_ret = sync_mes_to_rdma();
 
     if(sync_ret < 0){ perror("sync message error"); return ; }
-    printf("[master] snapshot %d bytes, posting write\n", sync_ret);
 
     if(sync_ret > 0 && rdma_send_mes_to_slave((uint32_t)sync_ret) < 0){
         fprintf(stderr, "rdma write fail\n"); 
     }
-    printf("[master] write completed\n");
 
     if(rdma_notify_slave(&g_slave, (uint32_t)sync_ret) < 0){
         fprintf(stderr, "notify fail\n"); return ;
     }
-    printf("[master] notify sent\n");
 
     if(sync_ret < 0){
         perror("sync mes to slave error");
@@ -246,8 +238,8 @@ printf("[master] local_info sent\n");
 
     char ack[4];
     nty_recv(fd, ack, 4, 0);
-printf("[master] sync done, %d bytes\n", sync_ret);
-    nty_close(fd);
+
+    // nty_close(fd);
     nty_close(listen_fd);
 
     return ;
@@ -263,9 +255,10 @@ void read_func(void *arg){
         return ;
     }
     
-    char *buf = calloc(1, 1024 * 1024 * 5);
+    char *buf = calloc(1, 512 * 1024);
     char *response = calloc(1, 1024 * 1024 * 1);
-    if (!buf || !response) {
+    char *capbuf   = calloc(1, 1024 * 1024 * 1);
+    if (!buf || !response || !capbuf) {
         free(buf);
         free(response);
         nty_close(cli_fd);
@@ -273,18 +266,30 @@ void read_func(void *arg){
     }
 
     while(1){
-        memset(buf, 0, 1024 * 1024 * 5);
+        memset(buf, 0, 512 * 1024);
         memset(response, 0, 1024 * 1024 * 1);
-printf("[RECV_CB] fd=%d\n", cli_fd);
-        int recv_len = nty_recv(cli_fd, buf, 1024 * 1024 * 5, 0);
+        int recv_len = nty_recv(cli_fd, buf, 512 * 1024, 0);
         if (recv_len <= 0) {
             break;
         }
 
+        resp_capture_reset();
+
         int length = kvs_protocol(buf, recv_len, response);
+        int cap_len = 0;
+        struct bpf_get_resp_info *info = resp_capture_read();
+
+        static unsigned long long n = 0;
+        if (info != NULL && info->len > 0) {
+            cap_len = (int)info->len;
+            memcpy(capbuf, info->resp_info, info->len); 
+            if( (strncmp(capbuf, "*3\r\n$3\r\nSET\r\n", 13) == 0 || strncmp(capbuf, "*3\r\n$3\r\nMOD\r\n", 13) == 0) || g_slave.fd >= 0){
+                nty_send(g_slave.fd, capbuf, info->len, 0);
+            }  
+        }
+
         if(length > 0){
             int ret = nty_send(cli_fd, response, length, 0);
-printf("SAVE send ret=%d\n", ret);
         }
         
     }
@@ -303,7 +308,10 @@ void accept_func(void *arg){
     if(fd < 0){
         perror("nty_socket error");
         return ;
-    }
+    }   
+
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
     
     struct sockaddr_in addr;
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -321,7 +329,7 @@ void accept_func(void *arg){
         nty_close(fd);
         return ;
     }
-
+    
     while(1){
         socklen_t len = sizeof(struct sockaddr_in);
         int client_fd = nty_accept(fd, (struct sockaddr *)&addr, &len);

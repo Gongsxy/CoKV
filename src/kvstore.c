@@ -3,6 +3,7 @@
 #include "load_conf.h"
 #include "uring_slot.h"
 #include "rdma.h"
+#include "../libbpf-bootstrap/examples/c/resp_capture.h"
 
 #include <signal.h>
 
@@ -90,6 +91,7 @@ static __g_rdma gr = {0};
 
 static int globle_add_fd = -1;
 static int globle_full_fd = -1;
+static int load_saved_msg = 0;
 
 const char *response[] = {
 
@@ -142,35 +144,6 @@ void *uring_add_cqe_thread(void *argv){
 }
 
 
-void *uring_full_cqe_thread(void *argv){
-
-    while (1) {
-        struct io_uring_cqe *cqe;
-        int u_ret = io_uring_wait_cqe(&full_ring, &cqe);
-        if (u_ret == 0) {
-            struct uring_info *info = io_uring_cqe_get_data(cqe);
-
-            printf("FULL CQE: res=%d fd=%d\n", cqe->res, info ? info->fd : -1);
-
-            if (cqe->res < 0) {
-                printf("FULL write error: %s\n", strerror(-cqe->res));
-            } else {
-                printf("FULL write %d bytes\n", cqe->res);
-                if (info) fsync(info->fd);
-            }
-
-            if (info) {
-                free(info->save_buf_ptr);
-                info->save_buf_ptr = NULL;
-                free(info);
-            }
-            io_uring_cqe_seen(&full_ring, cqe);
-        }
-    }
-
-}
-
-
 
 int get_add_fd(void){
     if(globle_add_fd < 0){
@@ -212,15 +185,10 @@ int is_number(char *msg){//1 true 0 false
 	return 1;
 }
 
-// #define ADDSTORAGE      add_save_flag
 
-// ok
 int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
     if(tokens == NULL || response == NULL) return -1;
 
-    if(!(strncmp(tokens[0], "HSET", 4) == 0)){
-        printf("tokens[0]:%s\n",tokens[0]);
-    }
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
         if(strcmp(tokens[0],command[i]) == 0){
@@ -555,7 +523,6 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 // ok
 static int sync_flag = 0;
 int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *push_flag){
-
     if(msg == NULL || tokens == NULL) return -1;
     char *tcopy = msg;
     int idx = 0;
@@ -863,21 +830,8 @@ int kvs_is_complete(char *msg, int length){
 }
 
 
-// ok
-void sync_mes_init(void) {
-    if (sync_mes != NULL) return;  
-    
-    sync_mes_cap = 1024 * 1024 * 5;
-    if(server_cfg.use_mempool == 1){
-        sync_mes = m_malloc(sync_mes_cap);
-    }else {
-        sync_mes = calloc(1, sync_mes_cap);
-    }
-}
-
-
 int kvs_protocol(char *msg, int length, char *response){
-printf("recv:%s\n", msg);
+
     int key_len = 0;
     int value_len = 0;
     int push_flag = 0;
@@ -912,108 +866,6 @@ printf("recv:%s\n", msg);
     }
 
 
-
-    if(strncmp(msg, "SYNC\n", 5) == 0){
-        mes_len = 0;
-        sync_mes_init();
-        FILE *fp = NULL;
-        if(server_cfg.add_save == 1){
-            fp = fopen("config/add.txt", "r");
-        }else if(server_cfg.full_save == 1){
-            fp = fopen("config/full.txt", "r");
-        }
-
-        if (!fp) {
-            printf( "$4\r\nERROR\r\n");
-            return 0;
-        }
-        
-        char line[1024];
-        char cmd[1024] = {0};
-        char key[1024] = {0};
-        char value[1024] = {0};
-        int has_key = 0, has_cmd = 0, has_value = 0;
-        int key_len = 0, value_len = 0;
-        memset(sync_mes, 0, sizeof(sync_mes));
-        while (fgets(line, sizeof(line), fp)) {
-
-            // line[strcspn(line, "\r\n")] = '\0';
-            
-            if (strncmp(line, "cmd: ", 5) == 0) {
-                sscanf(line, "cmd: %s\r\n", cmd);
-                has_cmd = 1;
-            }else if (strncmp(line, "key_len: ", 9) == 0) {
-                sscanf(line, "key_len: %d\r\n", &key_len);
-            }else if (strncmp(line, "key: ", 5) == 0) {
-                strncpy(key, line + 5, key_len);
-                key[key_len] = '\0';
-                // printf("key:%s", key);
-                has_key = 1;
-            }else if (strncmp(line, "value_len: ", 11) == 0) {
-                sscanf(line, "value_len: %d\r\n", &value_len);
-            }else if (strncmp(line, "value: ", 7) == 0) {
-                strncpy(value, line + 7, value_len);
-                value[value_len] = '\0';
-                // printf("value:%s", value);s
-                has_value = 1;
-            }
-            
-            int i = 0;
-            while(i < 8){
-                if(strcmp(cmd, key_value_command[i]) == 0){
-                    i = 10;
-                    break;
-                }
-            }
-            if(i = 10){
-                if (has_value == 1) {
-                    char resp[4096];
-                    int n = snprintf(resp, 4096,"*3\r\n$3\r\n%s\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",cmd,key_len, key, value_len, value);
-                    resp[n] = '\0';
-                    // printf("push_msg:%s\n", resp);
-                    // kvs_protocol_push(resp);
-                    if (sync_mes_len + n < sync_mes_cap) {
-                        memcpy(sync_mes + sync_mes_len, resp, n);
-                        sync_mes_len += n;
-                    }
-                    
-                    has_cmd = 0;
-                    has_key = 0;
-                    has_value = 0;
-                    key_len = 0;
-                    value_len = 0;
-                    cmd[0] = key[0] = value[0] = '\0';
-                }
-            }else{
-                if (has_key == 1) {
-                    char resp[4096];
-                    int n = snprintf(resp, sizeof(resp),"*2\r\n$3\r\n%s\r\n$%ld\r\n%s\r\n",cmd, strlen(key), key);
-                    
-                    resp[n] = '\0';
-                    strcat(sync_mes, resp);
-                    
-                    has_cmd = 0;
-                    has_key = 0;
-                    has_value = 0;
-                    key_len = 0;
-                    cmd[0] = key[0] = '\0';
-                }
-            }
-        }
-        
-        fclose(fp);
-        kvs_protocol_push(sync_mes, sync_mes_len);
-        memset(sync_mes, 0, 1024 * 1024 * 9);
-        sync_mes_len = 0;
-        // memset(mes, 0, 1024 * 1024 * 9);
-        mes_len = 0;
-        printf("DONE\r\n");
-        return 0;
-    }
-
-    // if(*response != '0'){
-    //     memset(response, 0, BUFFER_LENGTH);
-    // }
     memcpy(mes + mes_len,msg,length);
 
     mes_len += length;
@@ -1040,58 +892,35 @@ printf("recv:%s\n", msg);
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
 
         if(server_cfg.add_save == 1) {
+            if(load_saved_msg == 1){
+                int fd = get_add_fd();
+                struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
 
-            int fd = get_add_fd();
-            struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
-#if 0
-            if (!sqe) {
-                perror("sqe_get failed");
-                return -1;
-            }
-            static int i = 0;
+                if (!sqe) {
+                    fprintf(stderr, "add_ring sqe unavailable, skip add persistence\n");
+                } else {
+                    uring_info *slot = u_info_alloc();
+                    if (!slot) {
 
-            u_info[i].idx = i;
-            u_info[i].fd = fd;
-            memcpy(u_info[i].buffer, single_cmd, packet_len);
-            io_uring_prep_write(sqe, fd, u_info[i].buffer, packet_len, 0);
-            io_uring_sqe_set_data(sqe, &u_info[i]);
-// printf("[ADD] before submit idx=%d\n", i);
-            io_uring_submit(&add_ring);
-// printf("[ADD] after submit idx=%d\n", i);
-            i++;
-            if (i >= 1024) {
-printf("!!!!!!!! u_info exhausted !!!!!!!!\n");
-printf("submit_count=%d\n", i);
-printf("RETURN FROM ADD\n");
-return 0;
-            }
-#else
+                        do {
+                            io_uring_submit(&add_ring);
+                            struct io_uring_cqe *cqe;
+                            if (io_uring_wait_cqe(&add_ring, &cqe) == 0) {
+                                struct uring_info *done = io_uring_cqe_get_data(cqe);
+                                if (done) u_info_free(done);
+                                io_uring_cqe_seen(&add_ring, cqe);
+                            }
+                            slot = u_info_alloc();
+                        } while (!slot);
+                    }
 
-            if (!sqe) {
-                fprintf(stderr, "add_ring sqe unavailable, skip add persistence\n");
-            } else {
-                uring_info *slot = u_info_alloc();
-                if (!slot) {
-
-                    do {
-                        io_uring_submit(&add_ring);
-                        struct io_uring_cqe *cqe;
-                        if (io_uring_wait_cqe(&add_ring, &cqe) == 0) {
-                            struct uring_info *done = io_uring_cqe_get_data(cqe);
-                            if (done) u_info_free(done);
-                            io_uring_cqe_seen(&add_ring, cqe);
-                        }
-                        slot = u_info_alloc();
-                    } while (!slot);
+                    slot->fd = fd;
+                    memcpy(slot->buffer, single_cmd, packet_len);
+                    io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
+                    io_uring_sqe_set_data(sqe, slot);
+                    io_uring_submit(&add_ring);
                 }
-
-            slot->fd = fd;
-            memcpy(slot->buffer, single_cmd, packet_len);
-            io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
-            io_uring_sqe_set_data(sqe, slot);
-            io_uring_submit(&add_ring);
-         }
-#endif
+            }
         }
         if(server_cfg.push_flag){
             kvs_protocol_push(single_cmd, count);
@@ -1116,19 +945,12 @@ return 0;
 }
 
 
-// mempool
 int init_kvs(void){
 #if ENABLE_ARRAY
     // memset(globle_array,0,sizeof(kvs_array_t));
     globle_array = malloc(sizeof(kvs_array_t));
     kvs_array_create(globle_array);
 #endif
-
-// #if ENABLE_RBTREE
-//     // memset(globle_rbtree,0,sizeof(kvs_rbtree_t));
-//     globle_rbtree = malloc(sizeof(kvs_rbtree_t));
-//     kvs_rbtree_create(globle_rbtree);
-// #endif
 
 #if ENABLE_HASH
     // memset(globle_hash,0,sizeof(kvs_hash_t));
@@ -1145,19 +967,12 @@ int init_kvs(void){
 }
 
 
-// mempool
 void dest_kvs(void){
 #if ENABLE_ARRAY
 free(globle_array);
 kvs_array_destory(globle_array);
 
 #endif
-
-// #if ENABLE_RBTREE
-// free(globle_rbtree);
-// kvs_rbtree_destory(globle_rbtree);
-
-// #endif
 
 #if ENABLE_HASH
 free(globle_hash);
@@ -1175,13 +990,11 @@ m_reset();
 }
 
 
-// ok
 int origin_size = 0;
 static char *old_mes = NULL;
 
-// ok
+
 void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len){
-    printf("Lcmd:%s,key:%s,value:%s\n",cmd, key, value);
 #if ENABLE_ARRAY
     if(strcmp(cmd,"SET") == 0){
         kvs_array_set(globle_array, key, value);
@@ -1195,19 +1008,7 @@ void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len)
         kvs_array_exist(globle_array, key);
     }
 #endif
-// #if ENABLE_RBTREE
-//     if(strcmp(cmd,"RSET") == 0){
-//         kvs_rbtree_set(globle_rbtree, key, value);
-//     }else if(strcmp(cmd,"RDEL") == 0){
-//         kvs_rbtree_del(globle_rbtree, key);
-//     }else if(strcmp(cmd,"RMOD") == 0){
-//         kvs_rbtree_mod(globle_rbtree, key, value);
-//     }else if(strcmp(cmd,"RGET") == 0){
-//         kvs_rbtree_get(globle_rbtree, key);
-//     }else if(strcmp(cmd,"REXIST") == 0){
-//         kvs_rbtree_exist(globle_rbtree, key);
-//     }
-// #endif
+
 #if ENABLE_HASH
     if(strcmp(cmd,"HSET") == 0){
         kvs_hash_set(globle_hash, key, value, key_len, value_len);
@@ -1237,16 +1038,12 @@ void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len)
 
 }
 
-// ok
-// read requesies in a.txt
 void kvs_add_read(char *cmd, char *key, char *value){
     int fd = open("config/add.txt", O_RDONLY);
     if(fd == -1){
         perror("open a.txt");
         return;
     }
-
-    server_cfg.add_save = 0;
 
     struct stat st;
     if(fstat(fd, &st) < 0){
@@ -1279,11 +1076,12 @@ void kvs_add_read(char *cmd, char *key, char *value){
 
     char *tmp = calloc(1, 1024 * 1024 * 5);
     kvs_protocol(buf, len, tmp);
+    load_saved_msg = 1;
     munmap(addr, len);
     close(fd);
 }
 
-// ok
+
 void kvs_full_read(char *cmd, char *key, char *value){
 
     int fd = open("config/full.txt", O_RDONLY);
@@ -1367,7 +1165,7 @@ static pthread_t add_pid;
 static pthread_t full_pid;
 int main(int argc, char const *argv[]){
     signal(SIGPIPE, SIG_IGN);
-    // if(argc != 3) return -1;
+
     signal(SIGPIPE, SIG_IGN);
     memset(&add_params, 0, sizeof(add_params));
     memset(&full_params, 0, sizeof(full_params));
@@ -1387,18 +1185,12 @@ int main(int argc, char const *argv[]){
         if(server_cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
         }
-        // server_cfg.add_save = 1;
-        pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
-        // pthread_create(&full_pid, NULL, uring_full_cqe_thread, NULL);
-        // reactor_start(server_cfg.port,kvs_protocol);
-        rdma_init(&gr);
-        ntyco_start(&server_cfg, &gr);
-    }else if(server_cfg.mode == 2){
-        
-        if(server_cfg.add_save == 1) kvs_add_read(cmd, key, value);
-        if(server_cfg.full_save == 1) kvs_full_read(cmd, key, value);
 
-        proactor_start(server_cfg.port,kvs_protocol);
+        pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
+
+        rdma_init(&gr);
+        if(resp_capture() < 0) return -1;
+        ntyco_start(&server_cfg, &gr);
     }
     dest_kvs();
     kvs_push_destroy();

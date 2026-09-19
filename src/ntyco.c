@@ -155,6 +155,8 @@ void rdma_handshake(void *arg){
         return ;
     }
 
+    printf("[master] ctx=%p qp=%p mr=%p gid_index=%d\n",
+                (void*)g_rdma.ctx, (void*)g_rdma.qp, (void*)g_rdma.mr, g_rdma.gid_index);
 
     int fd = nty_accept(listen_fd, (struct sockaddr *)&addr, &len);
     if(fd < 0){

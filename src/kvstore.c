@@ -91,7 +91,7 @@ static __g_rdma gr = {0};
 
 static int globle_add_fd = -1;
 static int globle_full_fd = -1;
-static int load_saved_msg = 0;
+static int load_saved_msg = 1;
 
 const char *response[] = {
 
@@ -1039,6 +1039,7 @@ void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len)
 }
 
 void kvs_add_read(char *cmd, char *key, char *value){
+    
     int fd = open("config/add.txt", O_RDONLY);
     if(fd == -1){
         perror("open a.txt");
@@ -1075,8 +1076,11 @@ void kvs_add_read(char *cmd, char *key, char *value){
     memcpy(buf, p, len);
 
     char *tmp = calloc(1, 1024 * 1024 * 5);
+    int stop_save = 0;
+    load_saved_msg = stop_save;
     kvs_protocol(buf, len, tmp);
-    load_saved_msg = 1;
+    stop_save = 1;
+    load_saved_msg = stop_save;
     munmap(addr, len);
     close(fd);
 }

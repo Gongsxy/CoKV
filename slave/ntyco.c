@@ -1,7 +1,3 @@
-
-
-
-
 #include "../NtyCo/core/nty_coroutine.h"
 #include <netinet/in.h>
 
@@ -102,7 +98,6 @@ void rdma_handshake(void *arg)
 
     rdma_modify(g_rdma_slave.qp, local_psn, g_s_slave.remote_qpn, &g_s_slave.remote_gid, g_s_slave.remote_psn, g_rdma_slave.gid_index);
 
-    printf("[slave] qp ready, waiting length\n");
 
     uint32_t recv_len_net;
     ssize_t mes_rv = nty_recv(fd, &recv_len_net, sizeof(recv_len_net),0);
@@ -112,15 +107,17 @@ void rdma_handshake(void *arg)
         return ;
     }
     transfer_len = ntohl(recv_len_net);
-    printf("[slave] transfer_len = %u\n", transfer_len);
-    if (transfer_len > 0) {
-        printf("[slave] buf content: %.*s\n", (int)transfer_len, g_rdma_slave.buf);
-    }
+
+
     if(transfer_len != 0){
         char *resp_switch = calloc(1, 1024 * 1024 * 5);
+        char *resp_out    = calloc(1, 5 * 1024 * 1024);
         int length = full_save_to_resp(g_rdma_slave.buf, transfer_len, resp_switch);
-        if(length){
-            int recv_length = kvs_protocol(resp_switch, length, res);
+        if(length > 0){
+            if(res == NULL){
+                res = calloc(1, 1024 * 1024);
+            }
+            int recv_length = kvs_protocol(resp_switch, length, resp_out);
         }else{
             kvs_protocol(g_rdma_slave.buf, transfer_len, resp_switch);
         }
@@ -128,7 +125,31 @@ void rdma_handshake(void *arg)
     uint32_t ack = htonl(1);
     nty_send(fd, &ack, sizeof(ack), 0);
     // close(fd);
-    nty_close(fd);
+    // nty_close(fd);
+    char *cbuf = calloc(1, 1024 * 1024 * 5);
+    char *cres = calloc(1, 1024 * 1024);
+    if (!cbuf || !cres) {
+        free(cbuf); free(cres);
+        nty_close(fd);
+        return ;
+    }
+
+
+    while (1) {
+        memset(cbuf, 0, 1024 * 1024 * 5);
+        memset(cres, 0, 1024 * 1024);
+
+        int n = nty_recv(fd, cbuf, 1024 * 1024 * 5, 0);  
+        if (n <= 0) {
+            printf("[slave] master gone, n=%d\n", n);
+            break;
+        }
+
+        int rlen = kvs_protocol(cbuf, n, cres);
+    }
+
+    free(cbuf);
+    free(cres);
 
     return ;
 }

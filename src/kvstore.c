@@ -195,6 +195,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
     }
+
     char *cmd = tokens[0];
     char *key = tokens[1];
     char *value = tokens[2];
@@ -432,80 +433,81 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_SAVE:{
+            if(server_cfg.full_save == 1){
+                int full_fd = get_full_fd();
+                if (full_fd < 0) {
+                    length = sprintf(response, "-ERR open full file failed\r\n");
+                    break;
+                }
 
-            int full_fd = get_full_fd();
-            if (full_fd < 0) {
-                length = sprintf(response, "-ERR open full file failed\r\n");
-                break;
-            }
+                char *tmp = calloc(1, 1024 * 1024 * 5);
+                if (!tmp) {
+                    length = sprintf(response, "-ERR out of memory\r\n");
+                    close(full_fd);
+                    break;
+                }
 
-            char *tmp = calloc(1, 1024 * 1024 * 5);
-            if (!tmp) {
-                length = sprintf(response, "-ERR out of memory\r\n");
-                close(full_fd);
-                break;
-            }
+                int hash_length = kvs_hash_save(globle_hash, tmp);
 
-            int hash_length = kvs_hash_save(globle_hash, tmp);
-
-            if (hash_length <= 0) {
-                close(full_fd);
-                free(tmp);
-                length = sprintf(response, "+OK\r\n");
-                break;
-            }
-
-            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
-            if (!sqe_full) {
-                close(full_fd);
-                free(tmp);
-                length = sprintf(response, "-ERR save busy\r\n");
-                break;
-            }
-
-            struct uring_info *full_info = calloc(1, sizeof(*full_info));
-            full_info->save_buf_ptr = tmp;
-            full_info->fd = full_fd;
-
-            io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length, 0);
-            io_uring_sqe_set_data(sqe_full, full_info);
-
-            int sub_ret = io_uring_submit(&full_ring);
-            if (sub_ret < 0) {
-                free(full_info->save_buf_ptr);
-                free(full_info);
-                close(full_fd);
-
-                length = sprintf(response, "-ERR submit failed\r\n");
-                break;
-            }
-
-            struct io_uring_cqe *cqe;
-            int wait_ret = io_uring_wait_cqe(&full_ring, &cqe);
-            if (wait_ret == 0) {
-                struct uring_info *info = io_uring_cqe_get_data(cqe);
-
-                if (cqe->res < 0) {
-                    length = sprintf(response, "-ERR save failed\r\n");
-                } else {
-                    fsync(full_fd);
+                if (hash_length <= 0) {
+                    close(full_fd);
+                    free(tmp);
                     length = sprintf(response, "+OK\r\n");
+                    break;
                 }
 
-                if (info) {
-                    free(info->save_buf_ptr);
-                    free(info);
+                struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
+                if (!sqe_full) {
+                    close(full_fd);
+                    free(tmp);
+                    length = sprintf(response, "-ERR save busy\r\n");
+                    break;
                 }
-                io_uring_cqe_seen(&full_ring, cqe);
-                close(full_fd);
-            } else {
-                close(full_fd);
-                free(tmp);
-                free(full_info);
-                length = sprintf(response, "-ERR save failed\r\n");
+
+                struct uring_info *full_info = calloc(1, sizeof(*full_info));
+                full_info->save_buf_ptr = tmp;
+                full_info->fd = full_fd;
+
+                io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length, 0);
+                io_uring_sqe_set_data(sqe_full, full_info);
+
+                int sub_ret = io_uring_submit(&full_ring);
+                if (sub_ret < 0) {
+                    free(full_info->save_buf_ptr);
+                    free(full_info);
+                    close(full_fd);
+
+                    length = sprintf(response, "-ERR submit failed\r\n");
+                    break;
+                }
+
+                struct io_uring_cqe *cqe;
+                int wait_ret = io_uring_wait_cqe(&full_ring, &cqe);
+                if (wait_ret == 0) {
+                    struct uring_info *info = io_uring_cqe_get_data(cqe);
+
+                    if (cqe->res < 0) {
+                        length = sprintf(response, "-ERR save failed\r\n");
+                    } else {
+                        fsync(full_fd);
+                        length = sprintf(response, "+OK\r\n");
+                    }
+
+                    if (info) {
+                        free(info->save_buf_ptr);
+                        free(info);
+                    }
+                    io_uring_cqe_seen(&full_ring, cqe);
+                    close(full_fd);
+                } else {
+                    close(full_fd);
+                    free(tmp);
+                    free(full_info);
+                    length = sprintf(response, "-ERR save failed\r\n");
+                }
+
+                break;
             }
-
-            break;
      
         }
         default:{
@@ -619,7 +621,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         //         tokens[0][k] = toupper(tokens[0][k]);
                         //     }
                         // }
-                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "SYNC") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0){
+                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0){
                             sprintf(tokens[0], "%s", cmd_tmp);
                         }else if(strncmp(server_cfg.storage_structure, "array", 5) == 0){
                             sprintf(tokens[0], "%s", cmd_tmp);

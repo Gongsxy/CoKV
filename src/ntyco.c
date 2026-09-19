@@ -285,7 +285,7 @@ void read_func(void *arg){
         if (info != NULL && info->len > 0) {
             cap_len = (int)info->len;
             memcpy(capbuf, info->resp_info, info->len); 
-            if( (strncmp(capbuf, "*3\r\n$3\r\nSET\r\n", 13) == 0 || strncmp(capbuf, "*3\r\n$3\r\nMOD\r\n", 13) == 0) || g_slave.fd >= 0){
+            if( (strncmp(capbuf, "*3\r\n$3\r\nSET\r\n", 13) == 0 || strncmp(capbuf, "*3\r\n$3\r\nMOD\r\n", 13) == 0) && g_slave.fd >= 0){
                 nty_send(g_slave.fd, capbuf, info->len, 0);
             }  
         }

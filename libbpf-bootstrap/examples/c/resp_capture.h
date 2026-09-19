@@ -5,7 +5,7 @@
 #define TASK_COMM_LEN   16
 
 struct bpf_get_resp_info{
-    char resp_info[1048576];
+    char resp_info[1 * 1024 * 1024];
     int len;
     __u32 drop;
 };

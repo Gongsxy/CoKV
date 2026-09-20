@@ -1,3 +1,4 @@
+
 #include "kvstore.h"
 #include "server.h"
 #include "load_conf.h"
@@ -6,6 +7,7 @@
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
 
 #include <signal.h>
+#include <malloc.h>
 
 #if 1
 kvs_array_t *globle_array = NULL;
@@ -68,6 +70,7 @@ enum {
     KVS_CMD_QUIT,
     KVS_CMD_INFO,
     KVS_CMD_SAVE,
+    KVS_CMD_SHUTDOWN,
     KVS_CMD_COUNT
 };
 
@@ -84,6 +87,12 @@ struct io_uring_params add_params;
 struct io_uring_params full_params;
 uring_info u_info[1024];
 uring_info u_full_info;
+
+static int g_add_ring_ok  = 0;
+static int g_full_ring_ok = 0;
+
+
+volatile sig_atomic_t g_stop = 0;
 
 
 static __g_rdma gr = {0};
@@ -140,6 +149,7 @@ void *uring_add_cqe_thread(void *argv){
             io_uring_cqe_seen(&add_ring, cqe);
             
         }
+        if (u_ret < 0) { fprintf(stderr, "[uring] %s\n", strerror(-u_ret)); continue; }
     }
 }
 
@@ -195,7 +205,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
     }
-
+    if(strncmp(tokens[0], "H", 1) == 0){
+        memmove(tokens[0], tokens[0] + 1, strlen(tokens[0]));
+    }
     char *cmd = tokens[0];
     char *key = tokens[1];
     char *value = tokens[2];
@@ -616,11 +628,11 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                         }
                         char cmd_tmp[128] = {0};
                         memcpy(cmd_tmp, &tcopy[i], cmd_len);
-                        // if (tokens[0]) {
-                        //     for(int k = 0; tokens[0][k]; k++) {
-                        //         tokens[0][k] = toupper(tokens[0][k]);
-                        //     }
-                        // }
+                        if (cmd_tmp) {
+                            for(int k = 0; cmd_tmp[k]; k++) {
+                                cmd_tmp[k] = toupper(cmd_tmp[k]);
+                            }
+                        }
                         if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0){
                             sprintf(tokens[0], "%s", cmd_tmp);
                         }else if(strncmp(server_cfg.storage_structure, "array", 5) == 0){
@@ -843,31 +855,16 @@ int kvs_protocol(char *msg, int length, char *response){
 
     if (mes == NULL) {
         if(server_cfg.use_mempool == 1){
-            mes = m_malloc(1024 * 1024 * 7);
-            if(mes) memset(mes, 0, 1024 * 1024 * 7);
+            mes = m_malloc(1024 * 1024 * 5);
+            if(mes) memset(mes, 0, 1024 * 1024 * 5);
         }else {
-            mes = calloc(1, 1024 * 1024 * 7);
+            mes = calloc(1, 1024 * 1024 * 5);
         }
-        // mes = calloc(1, 1024 * 1024 * 5);
+        // mes = calloc(1, 1024 * 1024 * 2);
         mes_len = 0;
     }
-    
-    if(strncmp(msg, "+", 1) == 0) {
-
-        int i = 0, j = 0, in = 0;
-        while(msg[i]){
-            if(msg[i] == '*') {
-                msg[j] = msg[i];
-                in ++;
-                j++;
-            }
-            i++; 
-        }
-        msg[j] = '\0'; 
-        if(in == 0) return 0;
-    }
-
-
+   
+    // memset(mes, 0, 1024 * 1024 * 5);
     memcpy(mes + mes_len,msg,length);
 
     mes_len += length;
@@ -877,21 +874,23 @@ int kvs_protocol(char *msg, int length, char *response){
 
     int total_response_len = 0;
 
-
     while (mes_len > 0) {
 
         int packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break; 
 
-        char single_cmd[4096] = {0};
+        char single_cmd[1024 * 64] = {0};
         memcpy(single_cmd, mes, packet_len);
-        single_cmd[packet_len] = '\0';
         
-        char single_response[BUFFER_LENGTH] = {0};
+        char single_response[1024 * 64] = {0};
+
+        single_cmd[packet_len] = '\0';
+        single_response[0] = '\0';
+
         char *tokens[3] = {NULL, NULL, NULL};
 
-
         int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
+
 
         if(server_cfg.add_save == 1) {
             if(load_saved_msg == 1){
@@ -924,9 +923,6 @@ int kvs_protocol(char *msg, int length, char *response){
                 }
             }
         }
-        if(server_cfg.push_flag){
-            kvs_protocol_push(single_cmd, count);
-        }
 
 
         int single_len = strlen(single_response);
@@ -939,56 +935,45 @@ int kvs_protocol(char *msg, int length, char *response){
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
-    if(mes_len == 0) memset(mes, 0, 1024 * 1024 * 7);
 
     return total_response_len; 
-    
-    // return count;
+
 }
 
 
 int init_kvs(void){
-#if ENABLE_ARRAY
-    // memset(globle_array,0,sizeof(kvs_array_t));
-    globle_array = malloc(sizeof(kvs_array_t));
-    kvs_array_create(globle_array);
-#endif
-
-#if ENABLE_HASH
-    // memset(globle_hash,0,sizeof(kvs_hash_t));
-    globle_hash = malloc(sizeof(kvs_hash_t));
-    kvs_hash_create(globle_hash);
-#endif
-
-#if ENABLE_SKIPTABLE
-    // memset(globle_skiplist, 0, sizeof(kvs_skiplist_t));
-    globle_skiplist = malloc(sizeof(kvs_skiplist_t));
-    kvs_skiplist_create(globle_skiplist);
-#endif
+    if(strcmp(server_cfg.storage_structure, "array") == 0){
+        // memset(globle_array,0,sizeof(kvs_array_t));
+        globle_array = malloc(sizeof(kvs_array_t));
+        kvs_array_create(globle_array);
+    }else if(strcmp(server_cfg.storage_structure, "hash") == 0){
+        // memset(globle_hash,0,sizeof(kvs_hash_t));
+        globle_hash = malloc(sizeof(kvs_hash_t));
+        kvs_hash_create(globle_hash);
+    }else if(strcmp(server_cfg.storage_structure, "skiplist") == 0){
+        // memset(globle_skiplist, 0, sizeof(kvs_skiplist_t));
+        globle_skiplist = malloc(sizeof(kvs_skiplist_t));
+        kvs_skiplist_create(globle_skiplist);
+    }
     return 0;
 }
 
 
 void dest_kvs(void){
-#if ENABLE_ARRAY
-free(globle_array);
-kvs_array_destory(globle_array);
-
-#endif
-
-#if ENABLE_HASH
-free(globle_hash);
-kvs_hash_destory(globle_hash);
-
-#endif
-
-#if ENABLE_SKIPTABLE
-kvs_skiplist_destroy(globle_skiplist);
-free(globle_skiplist);
-close(globle_add_fd);
-close(globle_full_fd);
-#endif
-m_reset();
+    if(strcmp(server_cfg.storage_structure, "array") == 0){
+        kvs_array_destory(globle_array);
+        free(globle_array);
+    }else if(strcmp(server_cfg.storage_structure, "hash") == 0){
+        kvs_hash_destory(globle_hash);
+        free(globle_hash);
+    }else if(strcmp(server_cfg.storage_structure, "skiplist") == 0){
+        kvs_skiplist_destroy(globle_skiplist);
+        free(globle_skiplist);
+    }
+    if (mes) { free(mes); mes = NULL; }
+    close(globle_add_fd);
+    close(globle_full_fd);
+    m_reset();
 }
 
 
@@ -1070,21 +1055,34 @@ void kvs_add_read(char *cmd, char *key, char *value){
         perror("mmap error");
         return ;
     }
-
+    
     char *p = addr;
     char *end = addr + len;
     
-    char *buf = m_malloc(len);
-    memcpy(buf, p, len);
 
     char *tmp = calloc(1, 1024 * 1024 * 5);
     int stop_save = 0;
     load_saved_msg = stop_save;
-    kvs_protocol(buf, len, tmp);
-    stop_save = 1;
-    load_saved_msg = stop_save;
+
+    const size_t CHUNK = 256 * 1024;
+    size_t off   = 0;
+    int    calls = 0;
+
+    while (off < len) {
+        size_t n = len - off;
+        if (n > CHUNK) n = CHUNK;
+
+        kvs_protocol(addr + off, (int)n, tmp);
+
+        off += n;
+        calls++;
+        if ((calls % 32) == 0) fprintf(stderr, "[load] %zu / %zu bytes\n", off, len);
+    }
+
+    load_saved_msg = 1;
     munmap(addr, len);
     close(fd);
+    free(tmp);
 }
 
 
@@ -1162,7 +1160,7 @@ void kvs_full_read(char *cmd, char *key, char *value){
             kvs_txt_load(cmd, key, value, key_len, value_len);
         }
     }
-    
+    close(fd);
     munmap(addr, len);
 }
 
@@ -1170,15 +1168,22 @@ static int add_save_flag = 0;
 static pthread_t add_pid;
 static pthread_t full_pid;
 int main(int argc, char const *argv[]){
-    signal(SIGPIPE, SIG_IGN);
+
+    mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+    mallopt(M_TRIM_THRESHOLD, 128 * 1024);
 
     signal(SIGPIPE, SIG_IGN);
     memset(&add_params, 0, sizeof(add_params));
     memset(&full_params, 0, sizeof(full_params));
 
     u_info_pool_init();
-    io_uring_queue_init_params(1024, &add_ring, &add_params);
-    io_uring_queue_init_params(1024, &full_ring, &full_params);
+    int add_ok = io_uring_queue_init_params(1024, &add_ring, &add_params);
+    int full_ok = io_uring_queue_init_params(1024, &full_ring, &full_params);
+    if (add_ok  < 0) fprintf(stderr, "[init] add_ring init error: %s\n",  strerror(-add_ok));
+    if (full_ok < 0) fprintf(stderr, "[init] full_ring init error: %s\n", strerror(-full_ok));
+
+    g_add_ring_ok  = (add_ok  == 0);
+    g_full_ring_ok = (full_ok == 0);
 
     load_config("config/server.conf", &server_cfg);
     init_kvs();
@@ -1191,11 +1196,12 @@ int main(int argc, char const *argv[]){
         if(server_cfg.full_save == 1) {
             kvs_full_read(cmd, key, value);
         }
-
-        pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
-
+        if (g_add_ring_ok){
+            pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
+        }
         rdma_init(&gr);
         if(resp_capture() < 0) return -1;
+        // malloc_trim(0);
         ntyco_start(&server_cfg, &gr);
     }
     dest_kvs();

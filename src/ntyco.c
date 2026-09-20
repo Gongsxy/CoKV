@@ -1,6 +1,7 @@
 #include "../NtyCo/core/nty_coroutine.h"
 #include <netinet/in.h>
 #include <sys/random.h>
+#include <malloc.h>
 
 #include "kvstore.h"
 #include "rdma.h"
@@ -257,20 +258,19 @@ void read_func(void *arg){
         return ;
     }
     
-    char *buf = calloc(1, 512 * 1024);
+    char *buf = calloc(1, 64 * 1024);
     char *response = calloc(1, 1024 * 1024 * 1);
     char *capbuf   = calloc(1, 1024 * 1024 * 1);
     if (!buf || !response || !capbuf) {
         free(buf);
         free(response);
+        free(capbuf);
         nty_close(cli_fd);
         return;
     }
 
     while(1){
-        memset(buf, 0, 512 * 1024);
-        memset(response, 0, 1024 * 1024 * 1);
-        int recv_len = nty_recv(cli_fd, buf, 512 * 1024, 0);
+        int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
         if (recv_len <= 0) {
             break;
         }
@@ -293,13 +293,22 @@ void read_func(void *arg){
         if(length > 0){
             int ret = nty_send(cli_fd, response, length, 0);
         }
-        
+
+        static uint64_t last_trim_ms = 0;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+        if (now_ms - last_trim_ms >= 1000) {        
+            last_trim_ms = now_ms;
+            malloc_trim(0);
+        }
     }
     nty_close(cli_fd);
     free(buf);    
     free(response);
+    free(capbuf);
+    malloc_trim(0); 
 }
-
 
 void accept_func(void *arg){
 
@@ -336,13 +345,20 @@ void accept_func(void *arg){
         socklen_t len = sizeof(struct sockaddr_in);
         int client_fd = nty_accept(fd, (struct sockaddr *)&addr, &len);
         if (client_fd < 0) {
-            continue;
+            if (client_fd < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue; 
+                if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS) continue; 
+                if (errno == EBADF || errno == EINVAL) break;
+                perror("nty_accept");
+                continue;
+            }
         }
 
-        int *arg = calloc(1, sizeof(int));
-        *arg = client_fd;
+        int *cli_arg = calloc(1, sizeof(int));
+        *cli_arg = client_fd;
+        if (!cli_arg) { nty_close(client_fd); continue; }
         nty_coroutine *read_co;
-        nty_coroutine_create(&read_co, read_func, arg);
+        nty_coroutine_create(&read_co, read_func, cli_arg);
     }
 }
 
@@ -360,3 +376,4 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     nty_schedule_run();
     return 0;
 }
+

@@ -46,7 +46,7 @@ int rdma_init(__g_rdma *g_rdma){
         goto err_ctx;
     }
 
-    g_rdma->cq = ibv_create_cq(g_rdma->ctx, 128, NULL, NULL, 0);
+    g_rdma->cq = ibv_create_cq(g_rdma->ctx, 512, NULL, NULL, 0);
     if(g_rdma->cq == NULL){
         perror("cq create error");
         goto err_pd;

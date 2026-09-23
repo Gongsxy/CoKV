@@ -538,8 +538,12 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                     close(full_fd);
                 } else {
                     close(full_fd);
-                    free(tmp);
-                    free(full_info);
+                    if (server_cfg.use_mempool == 1) {
+                        mp_large_free(pool, tmp);
+                    } else {
+                        free(tmp);
+                        free(full_info);
+                    }
                     length = sprintf(response, "-ERR save failed\r\n");
                 }
 
@@ -667,7 +671,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                             i++;
                         }else if(strncmp(server_cfg.storage_structure, "hash", 4) == 0){
                             sprintf(tokens[0], "H%s", cmd_tmp);
-                        }else if(strncmp(server_cfg.storage_structure, "skiptable", 9) == 0){
+                        }else if(strncmp(server_cfg.storage_structure, "skiplist", 8) == 0){
                             sprintf(tokens[0], "S%s", cmd_tmp);
                         }
 
@@ -903,10 +907,10 @@ int kvs_protocol(char *msg, int length, char *response){
         int packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break; 
 
-        char single_cmd[1024 * 64] = {0};
+        static char single_cmd[1024 * 64] = {0};
         memcpy(single_cmd, mes, packet_len);
         
-        char single_response[1024 * 64] = {0};
+        static char single_response[1024 * 64] = {0};
 
         single_cmd[packet_len] = '\0';
         single_response[0] = '\0';
@@ -940,10 +944,17 @@ int kvs_protocol(char *msg, int length, char *response){
                     }
 
                     slot->fd = fd;
-                    memcpy(slot->buffer, single_cmd, packet_len);
-                    io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
-                    io_uring_sqe_set_data(sqe, slot);
-                    io_uring_submit(&add_ring);
+                    slot->len = packet_len;
+                    slot->buffer = malloc(packet_len);
+                    if (!slot->buffer) {
+                        u_info_free(slot);
+                        fprintf(stderr, "[add] oom, skip log\n");
+                    } else {
+                        memcpy(slot->buffer, single_cmd, packet_len);
+                        io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
+                        io_uring_sqe_set_data(sqe, slot);
+                        io_uring_submit(&add_ring);
+                    }
                 }
             }
         }
@@ -959,9 +970,6 @@ int kvs_protocol(char *msg, int length, char *response){
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
-   
-    // memset(mes, 0, 5 * 1024 * 1024);
-
     return total_response_len; 
 }
 
@@ -1225,8 +1233,10 @@ int main(int argc, char const *argv[]){
     g_add_ring_ok  = (add_ok  == 0);
     g_full_ring_ok = (full_ok == 0);
 
-    pool = mp_create(1024 * 1024 * 1);
-    cmd_pool = mp_create(64 * 1024);
+    if(server_cfg.use_mempool == 1){
+        pool = mp_create(1024 * 1024 * 1);
+        cmd_pool = mp_create(64 * 1024);
+    }
 
     init_kvs();
     char cmd[TXT_LENGTH] = {0};

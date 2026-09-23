@@ -157,8 +157,7 @@ void rdma_handshake(void *arg){
         return ;
     }
 
-    printf("[master] ctx=%p qp=%p mr=%p gid_index=%d\n",
-                (void*)g_rdma.ctx, (void*)g_rdma.qp, (void*)g_rdma.mr, g_rdma.gid_index);
+    printf("master load finish\n");
 
     int fd = nty_accept(listen_fd, (struct sockaddr *)&addr, &len);
     if(fd < 0){
@@ -384,7 +383,9 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
 
     g_rdma = *g_m_rdma;
 
-    mp_create(64 * 1024);
+    if(cfg.use_mempool == 1){
+        mp_create(64 * 1024);
+    }
 
     nty_coroutine_create(&co, accept_func, p);
     nty_coroutine_create(&co, rdma_handshake, p);

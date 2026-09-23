@@ -8,10 +8,11 @@
 typedef struct uring_info{
 	int fd;
 	int idx;
-	char buffer[1024];
+	char *buffer;
 	char *save_buf_ptr;
 	int used;
 	int free_next;
+	int len;
 } uring_info;
 
 uring_info *u_info_alloc(void);

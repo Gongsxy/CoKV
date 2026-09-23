@@ -32,6 +32,7 @@ uring_info *u_info_alloc(void) {
     memset(&u_info[idx], 0, sizeof(u_info[idx]));
     u_info[idx].idx = idx;
     u_info[idx].used = 1;
+    u_info[idx].buffer = NULL;
     pthread_mutex_unlock(&u_info_lock);
     return &u_info[idx];
 }

@@ -39,8 +39,8 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 	memcpy(node->key, key, key_len);
 	node->key_len = key_len;
 	
-	// node->value = kvs_malloc(strlen(value) + 1);
 	node->value = calloc(1, value_len + 1);
+	// node->value = m_malloc(value_len + 1);
 	if(!node->value) {
 		free(node->key);
         free(node);
@@ -60,6 +60,9 @@ static void _free_node(hashnode_t *node) {
     free(node->key);
     free(node->value);
     free(node);
+	// m_reset(node->key);
+    // m_reset(node->value);
+    // m_reset(node);
 }
 
 
@@ -70,8 +73,8 @@ int kvs_hash_create(kvs_hash_t *hash) {
 
 	memset(hash, 0, sizeof(kvs_hash_t));
 
-	// hash->nodes = (hashnode_t**)malloc(sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	hash->nodes = (hashnode_t**)calloc(1, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
+	// hash->nodes = (hashnode_t**)m_malloc( sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	if (!hash->nodes) return -1;
 
 	hash->max_slots = MAX_TABLE_SIZE;
@@ -100,6 +103,7 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 		}
 	}
 	free(hash->nodes);
+	// m_reset(hash->nodes);
     hash->nodes = NULL;
     hash->count = 0;
 	
@@ -217,8 +221,10 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
     if (!node) return 1;
 
     free(node->value);  
+	// m_reset(node->value);
 
     char *new_value = (char *)calloc(1, value_len + 1);
+	// char *new_value = (char *)m_malloc(value_len + 1);
     if (!new_value) return -2;
     memcpy(new_value, value, value_len);
 

@@ -7,7 +7,7 @@
 // #include <bpf/bpf.h>
 #include <pthread.h>
 
-#include "resp_capture.skel.h"
+#include ".output/resp_capture.skel.h"
 #include "resp_capture.h"
 
 static struct resp_capture_bpf *skel = NULL;
@@ -48,8 +48,8 @@ void cap_lost_info(void *ctx, int cpu, __u64 cnt){
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
-	return 0;
-	// return vfprintf(stderr, format, args);
+	// return 0;
+	return vfprintf(stderr, format, args);
 }
 
 int resp_capture(void)

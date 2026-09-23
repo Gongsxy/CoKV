@@ -7,6 +7,7 @@
 #include "rdma.h"
 #include "load_conf.h"
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
+#include "mem_pool.h"
 
 
 #define ADD_FILENAME    "config/add.txt"
@@ -17,7 +18,7 @@ char *write_command[] = {
     "SET","MOD"
 };
 
-
+static struct mp_pool *pool = NULL;
 static Config cfg = {0};
 
 __g_rdma g_rdma = {0};
@@ -257,14 +258,22 @@ void read_func(void *arg){
         perror("read arg error");
         return ;
     }
-    
-    char *buf = calloc(1, 64 * 1024);
-    char *response = calloc(1, 1024 * 1024 * 1);
-    char *capbuf   = calloc(1, 1024 * 1024 * 1);
+    char *buf = NULL; char *response = NULL; char *capbuf = NULL;
+    if(cfg.use_mempool == 1){
+        buf = mp_alloc(pool, 64 * 1024);
+        response = mp_alloc(pool, 1024 * 1024 * 1);
+        capbuf   = mp_alloc(pool, 1024 * 1024 * 1);
+    }else {
+        buf = calloc(1, 64 * 1024);
+        response = calloc(1, 1024 * 1024 * 1);
+        capbuf   = calloc(1, 1024 * 1024 * 1);
+    }
     if (!buf || !response || !capbuf) {
-        free(buf);
-        free(response);
-        free(capbuf);
+        if(cfg.use_mempool == 0){
+            free(buf);
+            free(response);
+            free(capbuf);
+        }
         nty_close(cli_fd);
         return;
     }
@@ -306,11 +315,11 @@ void read_func(void *arg){
         }
     }
     nty_close(cli_fd);
-    free(buf);    
-    free(response);
-    free(capbuf);
     if(cfg.use_mempool == 0){
         malloc_trim(0); 
+        free(buf);    
+        free(response);
+        free(capbuf);
     }
 }
 
@@ -374,6 +383,8 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     *p = cfg.port;
 
     g_rdma = *g_m_rdma;
+
+    mp_create(64 * 1024);
 
     nty_coroutine_create(&co, accept_func, p);
     nty_coroutine_create(&co, rdma_handshake, p);

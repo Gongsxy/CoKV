@@ -1,6 +1,7 @@
 
 
 #include "kvstore.h"
+#include "mem_pool.h"
 
 // kvs_skiplist_t *globle_skiplist;
 
@@ -18,19 +19,19 @@ static skiplist_node* create_node(int level, char *key, char *value){
 
     skiplist_node *node;
 
-    node = kvs_malloc(sizeof(skiplist_node));
+    node = malloc(sizeof(skiplist_node));
 
 
     if(node == NULL) return NULL;
 
     memset(node,0,sizeof(skiplist_node));
 
-    node->key = kvs_malloc(strlen(key)+1);
+    node->key = malloc(strlen(key)+1);
     node->level = level;
 
     strcpy(node->key,key);
 
-    node->value = kvs_malloc(strlen(value)+1);
+    node->value = malloc(strlen(value)+1);
 
     strcpy(node->value,value);
 
@@ -55,7 +56,7 @@ int kvs_skiplist_create(kvs_skiplist_t *inst){
 
     inst->level = 1;
 
-    inst->header = kvs_malloc(sizeof(skiplist_node));
+    inst->header = malloc(sizeof(skiplist_node));
 
     if(inst->header==NULL) return -1;
 
@@ -77,16 +78,16 @@ void kvs_skiplist_destroy(kvs_skiplist_t *inst){
 
         skiplist_node *tmp = cur->forward[0];
 
-        kvs_free(cur->key);
+        free(cur->key);
 
-        kvs_free(cur->value);
+        free(cur->value);
 
-        kvs_free(cur);
+        free(cur);
 
         cur = tmp;
     }
 
-    kvs_free(inst->header);
+    free(inst->header);
     inst->header=NULL;
 }
 
@@ -134,7 +135,7 @@ int kvs_skiplist_set(kvs_skiplist_t *inst, char *key, char *value)
 
     cur=cur->forward[0];
 
-    // ÒÑ´æÔÚ
+
     if(cur && strcmp(cur->key,key) == 0)  return 1;
     int level=random_level();
 
@@ -175,9 +176,9 @@ int kvs_skiplist_mod(kvs_skiplist_t *inst,char *key,char *value){
 
     if(node==NULL) return 1;
 
-    kvs_free(node->value);
+    free(node->value);
 
-    node->value = kvs_malloc(strlen(value)+1);
+    node->value = malloc(strlen(value)+1);
 
     strcpy(node->value,value);
 
@@ -213,11 +214,11 @@ int kvs_skiplist_del(kvs_skiplist_t *inst,char *key){
 
     }
 
-    kvs_free(cur->key);
+    free(cur->key);
 
-    kvs_free(cur->value);
+    free(cur->value);
 
-    kvs_free(cur);
+    free(cur);
 
     while(inst->level > 1 && inst->header->forward[inst->level-1] == NULL){
         inst->level--;

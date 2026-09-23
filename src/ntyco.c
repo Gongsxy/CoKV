@@ -294,20 +294,24 @@ void read_func(void *arg){
             int ret = nty_send(cli_fd, response, length, 0);
         }
 
-        static uint64_t last_trim_ms = 0;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (now_ms - last_trim_ms >= 1000) {        
-            last_trim_ms = now_ms;
-            malloc_trim(0);
+        if(cfg.use_mempool == 0){
+            static uint64_t last_trim_ms = 0;
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+            if (now_ms - last_trim_ms >= 1000) {        
+                last_trim_ms = now_ms;
+                malloc_trim(0);
+            }
         }
     }
     nty_close(cli_fd);
     free(buf);    
     free(response);
     free(capbuf);
-    malloc_trim(0); 
+    if(cfg.use_mempool == 0){
+        malloc_trim(0); 
+    }
 }
 
 void accept_func(void *arg){

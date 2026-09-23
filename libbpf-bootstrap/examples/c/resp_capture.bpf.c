@@ -36,8 +36,6 @@ int BPF_UPROBE(handle_kvs_split,char *msg, void *a, void *b, int length, void *c
 	struct bpf_get_resp_info *info = bpf_map_lookup_elem(&resp_cap, &zero);
 	if (!info) return 0;
 
-	if (length <= 0) return 0;
-
 	__u32 copy_len = (__u32)length & 0xFFFF;
 	if (copy_len == 0) copy_len = 1;;
 

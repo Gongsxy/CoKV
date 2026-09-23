@@ -5,7 +5,7 @@
 
 #include "mem_pool.h"
 
-#define MAX_BLOCK   1024 * 1024 * 1
+#define MAX_BLOCK   4095
 
 
 struct mp_pool *mp_create(size_t size);

@@ -130,8 +130,9 @@ void *uring_add_cqe_thread(void *argv){
         if(u_ret == 0){
             struct uring_info *info = io_uring_cqe_get_data(cqe);
             if(info){
-                memset(info->buffer, 0, sizeof(u_info->buffer));
-                u_info_free(info);
+                if(info->buffer){ free(info->buffer); info->buffer = NULL; }
+                info->len = 0;
+                u_info_free(info); 
             }
 
             io_uring_cqe_seen(&add_ring, cqe);

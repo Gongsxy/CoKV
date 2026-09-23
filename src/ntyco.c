@@ -384,7 +384,7 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     g_rdma = *g_m_rdma;
 
     if(cfg.use_mempool == 1){
-        mp_create(64 * 1024);
+        pool = mp_create(64 * 1024);
     }
 
     nty_coroutine_create(&co, accept_func, p);

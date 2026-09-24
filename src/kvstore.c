@@ -37,7 +37,8 @@ const char *command[] = {
     "RSET","RGET","RDEL","RMOD","REXIST",
     "HSET","HGET","HDEL","HMOD","HEXIST",
     "SSET","SGET","SDEL","SMOD","SEXIST",
-    "SYNC","PING","QUIT","INFO","SAVE"
+    "SYNC","PING","QUIT","INFO","SAVE",
+    "CLEAR"
 };
 
 const char *key_value_command[] = {
@@ -75,6 +76,7 @@ enum {
     KVS_CMD_QUIT,
     KVS_CMD_INFO,
     KVS_CMD_SAVE,
+    KVS_CMD_CLEAR,
     KVS_CMD_COUNT
 };
 
@@ -184,10 +186,12 @@ int is_number(char *msg){//1 true 0 false
 	return 1;
 }
 
-
+static int skip_add_log = 0;
 int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
     if(tokens == NULL || response == NULL) return -1;
 
+    skip_add_log = 0;
+    
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
         if(strcmp(tokens[0],command[i]) == 0){
@@ -552,6 +556,28 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             }
      
         }
+        case KVS_CMD_CLEAR:{
+
+            skip_add_log = 1;
+
+            const char *paths[2] = { "config/add.txt", "config/full.txt" };
+            int ok = 1;
+
+            for(int k = 0; k < 2; k++){
+                int cfd = open(paths[k], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if(cfd < 0){
+                    fprintf(stderr, "[clear] %s: %s\n", paths[k], strerror(errno));
+                    ok = 0;
+                }else{
+                    fsync(cfd);
+                    close(cfd);
+                }
+            }
+
+            length = ok ? sprintf(response, "+OK\r\n") : sprintf(response, "-ERR clear failed\r\n");
+            break;
+        }
+
         default:{
             if(server_cfg.show_response == 1) length = sprintf(response,"-ERR unknown command '%s'\r\n", tokens[0]);
             break;
@@ -663,7 +689,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                                 cmd_tmp[k] = toupper(cmd_tmp[k]);
                             }
                         }
-                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0){
+                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0 || strcmp(cmd_tmp, "CLEAR") == 0){
                             sprintf(tokens[0], "%s", cmd_tmp);
                         }else if(strncmp(server_cfg.storage_structure, "array", 5) == 0){
                             sprintf(tokens[0], "%s", cmd_tmp);
@@ -922,7 +948,7 @@ int kvs_protocol(char *msg, int length, char *response){
 
 
         if(server_cfg.add_save == 1) {
-            if(load_saved_msg == 1){
+            if(load_saved_msg == 1 && skip_add_log == 0){
                 int fd = get_add_fd();
                 struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
 

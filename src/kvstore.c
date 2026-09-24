@@ -1253,7 +1253,7 @@ int main(int argc, char const *argv[]){
         pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
     }
     rdma_init(&gr);
-    // if(resp_capture() < 0) return -1;
+    if(resp_capture() < 0) return -1;
     if(server_cfg.use_mempool == 0){
         malloc_trim(0);
     }

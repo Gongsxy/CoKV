@@ -221,6 +221,198 @@ void testcase(int connfd){
 	
 }
 
+
+void testcase_get(int connfd){
+	int length = 0;
+	int j = 0;
+	int total_num = 0;
+	char *send_mes = malloc(4096000);
+
+	size_t cap = 4096000;
+	size_t len = 0;
+	for(total_num = 0; total_num < 100000; total_num ++){
+
+		if(j == 10){
+			j = 0;
+		}
+		char msg[4096] = {0};
+		char tmp[4096] = {0};
+		char tcopy[4096] = {0};
+
+		char cmd_tmp[128] = {0};
+		int idx = 0;
+
+		// get cmd
+		strcpy(tmp, "GET");                                  // ← 改：SET 换成 GET
+		tmp[strcspn(tmp, "\n")] = '\0';
+		int c_len = strlen(tmp);
+		memcpy(cmd_tmp, tmp, c_len);
+
+		int cmd_size = snprintf(NULL,0,"$%d\r\n%s\r\n",c_len,tmp);
+		char *cmd = malloc(cmd_size + 1);
+		sprintf(cmd, "$%d\r\n%s\r\n",c_len, tmp);
+		memcpy(msg, cmd, strlen(cmd));
+		msg[strlen(cmd)] = '\0';
+		idx++;
+		memset(tmp, 0, 4096);
+
+		// get key
+		sprintf(tmp, "%s%d", test_key, total_num);
+		strcat(tcopy, tmp);
+
+		idx++;
+		int k_len = strlen(tcopy);
+		int key_size = snprintf(NULL,0, "$%d\r\n%s\r\n",k_len,tcopy);
+		char *key = malloc(key_size + 1);
+		if(k_len == -1){
+			snprintf(key, k_len, "$%d\r\n\r\n",k_len);
+		}else if(k_len == 0){
+			snprintf(key, k_len, "$%d\r\n",k_len);
+		}else{
+			sprintf(key, "$%d\r\n%s\r\n",k_len, tcopy);
+		}
+		strcat(msg, key);
+		memset(tcopy, 0, 4096);
+
+		// match cmd that need value：cmds[] 里没有 "GET"，所以 match 恒为 0，
+		// 正好不会给 GET 拼 value，idx 就是 2
+		int i = 0;
+		int match = 0;
+		for(i = 0; i < 8; i ++){
+			if(strcmp(cmd_tmp, cmds[i]) == 0){
+				match = 1;
+				break;
+			}
+		}
+
+		if(match){
+			if(j == 3 || j == 7){
+				sprintf(tmp, "%s%d", test_value_mod, total_num);
+			}else{
+				sprintf(tmp, "%s%d", test_value, total_num);
+			}
+
+			strcat(tcopy, tmp);
+
+			idx++;
+			int v_len = strlen(tcopy);
+			int value_size = snprintf(NULL,0,"$%d\r\n%s\r\n",v_len,tcopy);
+			char *value = malloc(value_size + 1);
+
+			if(v_len == -1){
+				snprintf(value, v_len, "$%d\r\n\r\n",v_len);
+			}else if(v_len == 0){
+				snprintf(value, v_len, "$%d\r\n",v_len);
+			}else{
+				sprintf(value, "$%d\r\n%s\r\n",v_len, tcopy);
+			}
+			strcat(msg, value);
+			memset(tcopy, 0, 4096);
+			free(value);
+		}
+
+		char final_send_mes[4096] = {0};
+
+		// send request
+		sprintf(final_send_mes, "*%d\r\n", idx);
+		strcat(final_send_mes, msg);
+
+		size_t need = strlen(final_send_mes);
+		if (len + need + 1 > cap) {
+			cap = cap * 2 + need;
+			send_mes = realloc(send_mes, cap);
+		}
+		memcpy(send_mes + len, final_send_mes, need);
+		len += need;
+
+		send_num = len;
+		free(cmd);
+		free(key);
+
+		j++;
+	}
+	printf("has send\n");
+
+	length = strlen(send_mes);
+	send_msg(connfd, send_mes, length);
+	free(send_mes);
+
+	struct timeval rto = { 5, 0 };
+	setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+
+	size_t rcap = 1024 * 1024;
+	char *rbuf = malloc(rcap);
+	size_t used = 0, pos = 0;
+
+	int ok    = 0;      // 数据正确的条数
+	int reply = 0;      // 已经收到的回复条数（也正好是第几个 key）
+
+	while(reply < 100000){
+
+		if(pos > 0){                                  // 把没解析完的挪到前面
+			memmove(rbuf, rbuf + pos, used - pos);
+			used -= pos;
+			pos = 0;
+		}
+		if(used == rcap){
+			rcap *= 2;
+			rbuf = realloc(rbuf, rcap);
+		}
+
+		int n = recv(connfd, rbuf + used, rcap - used, 0);
+		if(n <= 0){
+			printf("recv stop n=%d, reply=%d\n", n, reply);
+			break;
+		}
+		used += n;
+
+		while(pos < used){
+
+			if(rbuf[pos] != '$'){                     // -ERR / +OK 之类，跳过这一行
+				char *nl = memchr(rbuf + pos, '\n', used - pos);
+				if(nl == NULL) break;
+				pos = (size_t)(nl - rbuf) + 1;
+				reply++;
+				continue;
+			}
+
+			char *nl = memchr(rbuf + pos, '\n', used - pos);
+			if(nl == NULL) break;                     // 长度行还没收全
+			size_t hdr = (size_t)(nl - (rbuf + pos)) + 1;
+			int vlen = atoi(rbuf + pos + 1);          // "$-1\r\n" -> -1
+
+			if(vlen < 0){                             // key 不存在
+				pos += hdr;
+				reply++;
+				continue;
+			}
+			if(used - pos < hdr + (size_t)vlen + 2) break;   // 正文还没收全
+
+			char *val = rbuf + pos + hdr;
+
+			// 期望值：和 testcase 存进去的完全一样
+			char exp_val[64] = {0};
+			if(reply % 10 == 3 || reply % 10 == 7){
+				sprintf(exp_val, "%s%d", test_value_mod, reply);
+			}else{
+				sprintf(exp_val, "%s%d", test_value, reply);
+			}
+
+			if((int)strlen(exp_val) == vlen && memcmp(val, exp_val, vlen) == 0){
+				ok++;                                 // ← 数据对了就加一
+			}
+
+			pos += hdr + (size_t)vlen + 2;
+			reply++;
+		}
+	}
+
+	printf("result: has get: %d/ total: %d\n", ok, 100000);                 // ← get 100000/100000
+	free(rbuf);
+}
+
+
+
 void get_old_mes(int connfd){
 	FILE *fp = fopen("config/sync.log", "r");
 
@@ -269,17 +461,22 @@ int main(int argc, char *argv[]) {
 
 	load_config("config/testcase_save.conf", &cfg);
 	int connfd = connect_tcpserver(cfg.ip, cfg.port);
-	if(cfg.get_old_mes_flag == 1) get_old_mes(connfd);	
-	if(cfg.mode == 1) testcase(connfd);
+	
+	if(strcmp(argv[1], "0") == 0) {
+		send_msg(connfd, "*1\r\n$5\r\nCLEAR\r\n", 15);
+	}else if(strcmp(argv[1], "1") == 0) {
+		testcase(connfd);
+	}else if(strcmp(argv[1], "2") == 0) {
+		testcase_get(connfd);
+		return 0;
+	}
+	printf("enter save\n");
 	if(cfg.full_save_flag == 1){
 		char tmp[128] = {0};
-		while(fgets(tmp, sizeof(tmp), stdin)){
-			printf("enter save\n");
-			if(strcmp(tmp, "save\n") == 0) {
-				send_msg(connfd, tmp, strlen(tmp));
-                break;
-            }
-		}
+		fgets(tmp, sizeof(tmp), stdin);
+		if(strcmp(tmp, "save\n") == 0) {
+			send_msg(connfd, "*1\r\n$4\r\nSAVE\r\n", 14);
+        }
 	}
 	
 	fgetc(stdin);

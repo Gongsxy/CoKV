@@ -28,6 +28,164 @@ char *test_key = "Teacher";
 char *test_value = "King";
 char *test_value_mod = "Htj";
 
+
+#define GET_TOTAL   100000      /* 一共查多少条, 必须和 testcase 那轮一致 */
+#define GET_BATCH   2000        /* 每批发多少条: 发一批收一批, 避免双向缓冲死锁 */
+
+static int send_all(int fd, const char *buf, size_t len)
+{
+	size_t off = 0;
+	while (off < len) {
+		ssize_t n = send(fd, buf + off, len - off, 0);
+		if (n <= 0) return -1;
+		off += (size_t)n;
+	}
+	return 0;
+}
+
+void testcase_get(int connfd)
+{
+	int     start;
+	int     total_num;
+	char    key[64];
+	char    exp[64];
+	size_t  cap = 4096000;
+	size_t  len = 0;
+	char   *send_mes = malloc(cap);
+
+	/* 接收缓冲 */
+	size_t  rcap = 1024 * 1024;
+	char   *rbuf = malloc(rcap);
+	size_t  used = 0;
+	size_t  pos  = 0;
+
+	long    ok = 0, miss = 0, bad = 0, err = 0;
+	int     first_bad = -1;
+	int     stop = 0;
+
+	struct timeval rto = { 5, 0 };
+	setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+
+	for (start = 0; start < GET_TOTAL && !stop; start += GET_BATCH) {
+
+		int batch = (GET_TOTAL - start < GET_BATCH) ? (GET_TOTAL - start) : GET_BATCH;
+		int got = 0;
+
+		/* ---------------- 1) 拼这一批 GET ---------------- */
+		len = 0;
+		for (total_num = start; total_num < start + batch; total_num++) {
+			int    klen = snprintf(key, sizeof key, "%s%d", test_key, total_num);
+			size_t need = (size_t)klen + 32;
+
+			if (len + need > cap) {
+				cap = cap * 2 + need;
+				send_mes = realloc(send_mes, cap);
+			}
+			len += (size_t)snprintf(send_mes + len, cap - len,
+						"*2\r\n$3\r\nGET\r\n$%d\r\n%s\r\n", klen, key);
+		}
+
+		if (send_all(connfd, send_mes, len) < 0) {
+			printf("send failed: batch=%d, %s\n", start, strerror(errno));
+			break;
+		}
+
+		/* ---------------- 2) 收完这一批的 batch 条回复 ---------------- */
+		while (got < batch) {
+
+			ssize_t n;
+			char   *p;
+
+			if (pos > 0) {                       /* 残包挪到头部 */
+				memmove(rbuf, rbuf + pos, used - pos);
+				used -= pos;
+				pos   = 0;
+			}
+			if (used == rcap) {
+				rcap *= 2;
+				rbuf = realloc(rbuf, rcap);
+			}
+
+			n = recv(connfd, rbuf + used, rcap - used, 0);
+			if (n <= 0) {
+				printf("recv stop: n=%zd errno=%d(%s)\n", n, errno, strerror(errno));
+				printf("  卡在 batch=%d, 本批 %d/%d, 累计已收 %ld 条\n",
+				       start, got, batch, ok + miss + bad + err);
+				stop = 1;
+				break;
+			}
+			used += (size_t)n;
+
+			while (pos < used && got < batch) {
+
+				int     seq = start + got;       /* 这条回复对应第几个 key */
+				char   *nl;
+				size_t  hdr;
+				int     vlen, elen;
+
+				p = rbuf + pos;
+
+				/* (a) 非 bulk: -ERR xxx / +OK */
+				if (*p != '$') {
+					nl = memchr(p, '\n', used - pos);
+					if (nl == NULL) break;   /* 行没收全 */
+					if (first_bad < 0) first_bad = seq;
+					printf("第 %d 条收到非 bulk 回复: %.*s\n", seq, (int)(nl - p), p);
+					err++;
+					pos = (size_t)(nl - rbuf) + 1;
+					got++;
+					continue;
+				}
+
+				/* (b) 长度行 $<len>\r\n */
+				nl = memchr(p, '\n', used - pos);
+				if (nl == NULL) break;       /* 长度行没收全 */
+				hdr  = (size_t)(nl - p) + 1;
+				vlen = atoi(p + 1);          /* "$-1\r\n" -> -1 */
+
+				if (vlen < 0) {              /* key 不存在 */
+					if (first_bad < 0) first_bad = seq;
+					miss++;
+					pos += hdr;
+					got++;
+					continue;
+				}
+				if (used - pos < hdr + (size_t)vlen + 2)
+					break;               /* 正文还没收全, 等下次 recv */
+
+				/* (c) 期望值: 必须和 testcase 写入规则完全一致 */
+				if (seq % 10 == 3 || seq % 10 == 7)
+					elen = snprintf(exp, sizeof exp, "%s%d", test_value_mod, seq);
+				else
+					elen = snprintf(exp, sizeof exp, "%s%d", test_value, seq);
+
+				if (vlen != elen || memcmp(p + hdr, exp, (size_t)elen) != 0) {
+					if (first_bad < 0) {
+						first_bad = seq;
+						printf("首个不一致: 第 %d 条 key=%s%d\n", seq, test_key, seq);
+						printf("  期望: %.*s (%d 字节)\n", elen, exp, elen);
+						printf("  实得: %.*s (%d 字节)\n", vlen, p + hdr, vlen);
+					}
+					bad++;
+				} else {
+					ok++;
+				}
+
+				pos += hdr + (size_t)vlen + 2;
+				got++;
+			}
+		}
+	}
+
+	printf("result: ok=%ld miss=%ld bad=%ld err=%ld / total=%d  first_bad=%d\n",
+	       ok, miss, bad, err, GET_TOTAL, first_bad);
+
+	free(rbuf);
+	free(send_mes);
+}
+
+
+
 int send_msg(int connfd, char *msg, int length) {
 
 	int res = send(connfd, msg, length, 0);
@@ -341,7 +499,7 @@ void testcase_del(int connfd){
 	send_msg(connfd, send_mes, length);
 }
 
-
+#if 0
 void testcase_get(int connfd){
 	int length = 0;
 	int j = 0;
@@ -530,6 +688,7 @@ void testcase_get(int connfd){
 	printf("result: has get: %d/ total: %d\n", ok, 100000);                 // ← get 100000/100000
 	free(rbuf);
 }
+#endif
 
 void get_old_mes(int connfd){
 	FILE *fp = fopen("./config/sync.log", "r");

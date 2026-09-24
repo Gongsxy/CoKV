@@ -191,7 +191,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
     if(tokens == NULL || response == NULL) return -1;
 
     skip_add_log = 0;
-    
+
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
         if(strcmp(tokens[0],command[i]) == 0){
@@ -452,10 +452,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 }
                 char *tmp = NULL;
                 if(server_cfg.use_mempool == 1){
-                    tmp = mp_alloc(pool, 1024 * 1024 * 5);
+                    tmp = mp_alloc(pool, 1024 * 1024 * 10);
                     
                 }else{
-                    tmp = calloc(1, 1024 * 1024 * 5);
+                    tmp = calloc(1, 1024 * 1024 * 10);
                 }
                 if (!tmp) {
                     length = sprintf(response, "-ERR out of memory\r\n");

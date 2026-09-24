@@ -187,7 +187,7 @@ int is_number(char *msg){//1 true 0 false
 }
 
 static int skip_add_log = 0;
-int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
+int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len){
     if(tokens == NULL || response == NULL) return -1;
 
     skip_add_log = 0;
@@ -324,6 +324,11 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 // hash
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
+            if(*value_len > KVS_MAX_VALUE){
+                length = sprintf(response, "-ERR value too large\r\n");
+                break;
+            }
+
             int ret = kvs_hash_set(globle_hash,key,value, *key_len, *value_len);
             if(ret < 0){
                 if(server_cfg.show_response == 1 || *response != '0') length = sprintf(response,"-ERR %s\r\n", "unknown command");
@@ -336,8 +341,16 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             char *result = kvs_hash_get(globle_hash,key, *key_len, value_len);
             if(result == NULL){
                 if(server_cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
+            }else if(*value_len > KVS_MAX_VALUE){
+                length = sprintf(response, "-ERR value too large\r\n");
             }else{
-                if(server_cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                if(server_cfg.show_response == 1){
+                    length  = sprintf(response, "$%d\r\n", *value_len);
+                    memcpy(response + length, result, *value_len);
+                    length += *value_len;
+                    response[length++] = '\r';
+                    response[length++] = '\n';
+                }
             }
             break;
         }
@@ -586,15 +599,13 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
         }
     }
 
-    
-    *push_flag = 0;
     return length;
 };
 
 
 // ok
 static int sync_flag = 0;
-int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *push_flag){
+int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *resp_total){
     if(msg == NULL || tokens == NULL) return -1;
     char *tcopy = msg;
     int idx = 0;
@@ -754,9 +765,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
                     // printf("key:%s\n",tokens[1]);
-                    if(tokens[1] == "SYNC"){
-                        sync_flag = 1;
-                    }
+                    
                     memset(tmp, 0, 32);
                     i = i + *key_len;
                     
@@ -831,7 +840,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
         
         if(single_num > 0 && finish_single == single_num){
             
-            int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len, push_flag);
+            int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len);
             resp_len += len;
 
             // mempool
@@ -861,7 +870,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
         }
 
     }
-
+    if(resp_total) *resp_total = resp_len;
     return i;
 }
 
@@ -936,17 +945,18 @@ int kvs_protocol(char *msg, int length, char *response){
         int packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break; 
 
-        static char single_cmd[1024 * 64] = {0};
+        static char single_cmd[1024 * 1024 * 1] = {0};
         memcpy(single_cmd, mes, packet_len);
         
-        static char single_response[1024 * 64] = {0};
+        static char single_response[1024 * 1024 * 1] = {0};
 
         single_cmd[packet_len] = '\0';
         single_response[0] = '\0';
 
         char *tokens[3] = {NULL, NULL, NULL};
 
-        int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
+        int resp_used = 0;
+        int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &resp_used);
 
 
         if(server_cfg.add_save == 1) {
@@ -989,10 +999,12 @@ int kvs_protocol(char *msg, int length, char *response){
         }
 
 
-        int single_len = strlen(single_response);
-        if (total_response_len + single_len < BUFFER_LENGTH) {
-            memcpy(response + total_response_len, single_response, single_len);
-            total_response_len += single_len;
+        if (total_response_len + resp_used < BUFFER_LENGTH) {
+            memcpy(response + total_response_len, single_response, resp_used);
+            total_response_len += resp_used;
+        }else {
+            fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
+                    total_response_len, resp_used, BUFFER_LENGTH);
         }
 
 

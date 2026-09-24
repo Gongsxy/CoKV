@@ -23,14 +23,14 @@ TARGET = kvstore
 TARGET_ADD = testcase_add
 TARGET_FULL = testcase_full
 TARGET_SLAVE = testcase_slave
-TARGET_SAVE = testcase_save
+TARGET_SAVE = testcase_characters
 
 TARGET_SERVER_SLAVE = kvstore_slave
 
 SRC_ADD = ./testcase/testcase_save_add.c  src/mem_pool.c src/get_mes.c src/load_conf.c
 SRC_FULL = ./testcase/testcase_save_full.c  src/mem_pool.c src/get_mes.c src/load_conf.c
 SRC_T_SLAVE = ./testcase/testcase_save_slave.c  src/mem_pool.c src/get_mes.c src/load_conf.c
-SRC_SAVE = ./testcase/testcase_save.c  src/mem_pool.c src/get_mes.c src/load_conf.c
+SRC_SAVE = ./testcase/testcase_characters.c  src/mem_pool.c src/get_mes.c src/load_conf.c
 JEM = ./testcase/testcase_stdin.c src/mem_pool.c
 
 # SRC_SERVER_SLAVE = slave/
@@ -39,7 +39,7 @@ JEM = ./testcase/testcase_stdin.c src/mem_pool.c
 
 # -ljemalloc
 all:
-	$(CC) -g -I$(SRC_DIR) -o $(TARGET) $(SOURCES_T) $(SOURCES_Ntyco) -luring -ldl libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a -lelf -lz -lpthread -libverbs 
+	$(CC) -g -I$(SRC_DIR) -o $(TARGET) $(SOURCES_T) $(SOURCES_Ntyco) -luring -ldl libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a -lelf -lz -lpthread -libverbs -ljemalloc
 
 testcase_add:
 	$(CC) -o $(TARGET_ADD) $(SRC_ADD)
@@ -50,8 +50,8 @@ testcase_full:
 testcase_slave:
 	$(CC) -g -o $(TARGET_SLAVE) $(SRC_T_SLAVE)
 	
-testcase_save:
-	$(CC) -g -o $(TARGET_SAVE) $(SRC_SAVE)
+testcase_characters:
+	$(CC) -g -o $(TARGET_SAVE) $(SRC_SAVE) -lhiredis
 
 
 server_slave:

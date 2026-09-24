@@ -444,6 +444,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_SAVE:{
+            
+            skip_add_log = 1;
+
             if(server_cfg.full_save == 1){
                 int full_fd = get_full_fd();
                 if (full_fd < 0) {
@@ -554,10 +557,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
                 break;
             }
-     
+        break;
         }
         case KVS_CMD_CLEAR:{
-
             skip_add_log = 1;
 
             const char *paths[2] = { "config/add.txt", "config/full.txt" };

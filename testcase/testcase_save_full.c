@@ -6,7 +6,6 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 
-#include "mempool.h"
 #include <ctype.h>
 
 #include "../src/kvstore.h"
@@ -582,7 +581,7 @@ int main(int argc, char *argv[]) {
 	load_config("config/testcase_full.conf", &cfg);
 
 	int connfd = connect_tcpserver(cfg.ip, cfg.port);
-	
+
 	if(strcmp(argv[1], "0") == 0) {
 		send_msg(connfd, "*1\r\n$5\r\nCLEAR\r\n", 15);
 	}else if(strcmp(argv[1], "1") == 0) {

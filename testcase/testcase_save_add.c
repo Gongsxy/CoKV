@@ -6,7 +6,6 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 
-#include "mempool.h"
 #include <ctype.h>
 
 #include "../src/kvstore.h"

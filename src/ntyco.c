@@ -311,18 +311,15 @@ void read_func(void *arg){
                 last_trim_ms = now_ms;
                 malloc_trim(0);
             }
-            free(buf);    
-            free(response);
-            free(capbuf);
         }
     }
     nty_close(cli_fd);
-    // if(cfg.use_mempool == 0){
-    //     malloc_trim(0); 
-    //     free(buf);    
-    //     free(response);
-    //     free(capbuf);
-    // }
+    if(cfg.use_mempool == 0){
+        malloc_trim(0); 
+        free(buf);    
+        free(response);
+        free(capbuf);
+    }
 }
 
 void accept_func(void *arg){

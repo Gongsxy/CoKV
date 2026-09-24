@@ -1244,21 +1244,21 @@ int main(int argc, char const *argv[]){
     char key[TXT_LENGTH] = {0};
     char value[TXT_LENGTH] = {0};
     
-    if(server_cfg.mode == 1){
-        if(server_cfg.add_save == 1) kvs_add_read(cmd, key, value);
-        if(server_cfg.full_save == 1) {
-            kvs_full_read(cmd, key, value);
-        }
-        if (g_add_ring_ok){
-            pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
-        }
-        rdma_init(&gr);
-        if(resp_capture() < 0) return -1;
-        if(server_cfg.use_mempool == 0){
-            malloc_trim(0);
-        }
-        ntyco_start(&server_cfg, &gr);
+
+    if(server_cfg.add_save == 1) kvs_add_read(cmd, key, value);
+    if(server_cfg.full_save == 1) {
+        kvs_full_read(cmd, key, value);
     }
+    if (g_add_ring_ok){
+        pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
+    }
+    rdma_init(&gr);
+    // if(resp_capture() < 0) return -1;
+    if(server_cfg.use_mempool == 0){
+        malloc_trim(0);
+    }
+    ntyco_start(&server_cfg, &gr);
+    
     dest_kvs();
     kvs_push_destroy();
     mp_destory(pool);

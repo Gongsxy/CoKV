@@ -274,7 +274,7 @@ void m_reset();
 int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
 static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char *msg);
 int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
-int kvs_hash_save(kvs_hash_t *hash, char *msg);
+int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length);
 
 
 

@@ -480,7 +480,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                     break;
                 }
 
-                int hash_length = kvs_hash_save(globle_hash, tmp);
+                int hash_length = kvs_hash_save(globle_hash, tmp, 1024 * 1024 * 10);
 
                 if (hash_length <= 0) {
                     close(full_fd);
@@ -945,7 +945,7 @@ int kvs_protocol(char *msg, int length, char *response){
         int packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break; 
 
-        static char single_cmd[64 * 1024] = {0};
+        static char single_cmd[128 * 1024] = {0};
         memcpy(single_cmd, mes, packet_len);
 
         uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);

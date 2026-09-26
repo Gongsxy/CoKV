@@ -251,10 +251,11 @@ static int _serialize_size(kvs_hash_t *hash) {
     return total;
 }
 
-int kvs_hash_save(kvs_hash_t *hash, char *msg){
+int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length){
     if (!hash || !msg ) return -1;
 
 	char *p = msg;
+	char *end = msg + length;
 
     int i = 0;
     for(i = 0; i < hash->max_slots; i++){
@@ -262,16 +263,27 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg){
         hashnode_t *node = hash->nodes[i];
 
         while(node != NULL){
+			
+			size_t need = 8 + node->key_len + node->value_len;
+			if (p + need > end) {
+                return p - msg;
+            }
 
-			p += sprintf(p, "key_len: %d\r\nkey: ", node->key_len);
+
+			uint32_t klen = node->key_len;
+			memcpy(p, &klen, 4);
+			// p += sprintf(p, "klen: %d\r\nkey: ", node->key_len);
+			p += 4;
 			memcpy(p, node->key, node->key_len);
             p += node->key_len;
 
-			p += sprintf(p, "\r\nvalue_len: %d\r\nvalue: ", node->value_len);
+			// p += sprintf(p, "\r\nvlen: %d\r\nvalue: ", node->value_len);
+			uint32_t vlen = node->value_len;
+			memcpy(p, &vlen, 4);
+			p += 4;
 			memcpy(p, node->value, node->value_len);
             p += node->value_len;
 
-			p += sprintf(p, "\r\n");
             node = node->next;
         }
     }

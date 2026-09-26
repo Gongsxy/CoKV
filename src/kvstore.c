@@ -6,6 +6,7 @@
 #include "rdma.h"
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
 #include "mem_pool.h"
+#include <zlib.h>
 
 #include <signal.h>
 #include <malloc.h>
@@ -930,7 +931,6 @@ int kvs_protocol(char *msg, int length, char *response){
         mes_len = 0;
     }
    
-    // memset(mes, 0, 1024 * 1024 * 5);
     memcpy(mes + mes_len,msg,length);
 
     mes_len += length;
@@ -945,9 +945,12 @@ int kvs_protocol(char *msg, int length, char *response){
         int packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break; 
 
-        static char single_cmd[1024 * 1024 * 1] = {0};
+        static char single_cmd[64 * 1024] = {0};
         memcpy(single_cmd, mes, packet_len);
+
+        uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);
         
+
         static char single_response[1024 * 1024 * 1] = {0};
 
         single_cmd[packet_len] = '\0';
@@ -983,14 +986,15 @@ int kvs_protocol(char *msg, int length, char *response){
                     }
 
                     slot->fd = fd;
-                    slot->len = packet_len;
-                    slot->buffer = malloc(packet_len);
+                    slot->len = packet_len + 4;
+                    slot->buffer = malloc(packet_len + 4);
                     if (!slot->buffer) {
                         u_info_free(slot);
                         fprintf(stderr, "[add] oom, skip log\n");
                     } else {
-                        memcpy(slot->buffer, single_cmd, packet_len);
-                        io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
+                        memcpy(slot->buffer, &crc_ret, 4);
+                        memcpy(slot->buffer + 4, single_cmd, packet_len);
+                        io_uring_prep_write(sqe, fd, slot->buffer, packet_len + 4, 0);
                         io_uring_sqe_set_data(sqe, slot);
                         io_uring_submit(&add_ring);
                     }
@@ -1003,8 +1007,8 @@ int kvs_protocol(char *msg, int length, char *response){
             memcpy(response + total_response_len, single_response, resp_used);
             total_response_len += resp_used;
         }else {
-            fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
-                    total_response_len, resp_used, BUFFER_LENGTH);
+            // fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
+            //         total_response_len, resp_used, BUFFER_LENGTH);
         }
 
 
@@ -1255,6 +1259,7 @@ static pthread_t full_pid;
 int main(int argc, char const *argv[]){
 
     load_config("config/server.conf", &server_cfg);
+    // uLong crc = crc32(0L, Z_NULL, 0);
 
     if(server_cfg.use_mempool == 0){
         mallopt(M_MMAP_THRESHOLD, 128 * 1024);

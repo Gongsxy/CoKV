@@ -5,11 +5,19 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <zlib.h>
 
 #include "kvstore.h"
 
 
 typedef struct hashtable_s kvs_hash_t;
+
+
+#define PACK_LEN_OFF				4
+#define CRC_LEN						4
+#define KEY_VALUE_OFF				4
+#define VERSION_OFF					4
+#define FULL_HDR_LEN   (PACK_LEN_OFF + CRC_LEN + VERSION_OFF)
 
 
 //Connection 
@@ -254,40 +262,48 @@ static int _serialize_size(kvs_hash_t *hash) {
 int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length){
     if (!hash || !msg ) return -1;
 
-	char *p = msg;
+	char *payload = msg + FULL_HDR_LEN;
+	char *p = payload;
 	char *end = msg + length;
 
     int i = 0;
     for(i = 0; i < hash->max_slots; i++){
 
         hashnode_t *node = hash->nodes[i];
-
         while(node != NULL){
 			
-			size_t need = 8 + node->key_len + node->value_len;
+			size_t need = CRC_LEN + KEY_VALUE_OFF + node->key_len + KEY_VALUE_OFF + node->value_len;
 			if (p + need > end) {
-                return p - msg;
+                return -1;
             }
-
-
+		
 			uint32_t klen = node->key_len;
-			memcpy(p, &klen, 4);
-			// p += sprintf(p, "klen: %d\r\nkey: ", node->key_len);
-			p += 4;
-			memcpy(p, node->key, node->key_len);
-            p += node->key_len;
+			char *crc_p = p;
+			p += CRC_LEN;
 
-			// p += sprintf(p, "\r\nvlen: %d\r\nvalue: ", node->value_len);
+			memcpy(p, &klen, KEY_VALUE_OFF); p += KEY_VALUE_OFF;
+			memcpy(p, node->key, node->key_len); p += node->key_len;
+
 			uint32_t vlen = node->value_len;
-			memcpy(p, &vlen, 4);
-			p += 4;
-			memcpy(p, node->value, node->value_len);
-            p += node->value_len;
+			memcpy(p, &vlen, KEY_VALUE_OFF); p += KEY_VALUE_OFF;
+			memcpy(p, node->value, node->value_len); p += node->value_len;
+
+			uint32_t c_r = (uint32_t)crc32(0L, crc_p + CRC_LEN, p - crc_p - CRC_LEN);
+			memcpy(crc_p, &c_r, CRC_LEN);
 
             node = node->next;
         }
+
     }
 
-    return p - msg;
+	uint32_t pack_len = (uint32_t)(p - payload);  
+	memcpy(msg + CRC_LEN, &pack_len, PACK_LEN_OFF);
+	memcpy(msg + CRC_LEN + PACK_LEN_OFF, "FV10", VERSION_OFF);
+
+	uint32_t crc_total = (uint32_t)crc32(0L, msg + CRC_LEN, (uInt)(p - msg - CRC_LEN));
+	memcpy(msg, &crc_total, CRC_LEN);
+
+
+    return (int)(FULL_HDR_LEN + pack_len);
 }
 

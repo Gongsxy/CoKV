@@ -161,7 +161,7 @@ int get_add_fd(void){
 
 int get_full_fd(void){
     if(globle_full_fd < 0){
-        globle_full_fd = open("config/full.txt", O_WRONLY | O_APPEND);
+        globle_full_fd = open("config/full.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if(globle_full_fd < 0){
             perror("open failed");
             return -1;
@@ -1200,7 +1200,11 @@ void kvs_full_read(char *cmd, char *key, char *value){
         perror("open a.txt");
         return;
     }
-    
+
+    char *cname = "SET";
+    if (strncmp(server_cfg.storage_structure, "hash", 4) == 0) cname = "HSET";
+    else if (strncmp(server_cfg.storage_structure, "skiplist", 8) == 0) cname = "SSET";
+    else if (strncmp(server_cfg.storage_structure, "array", 5) == 0) cname = "SET";
 
     struct stat st;
     if(fstat(fd, &st) < 0){
@@ -1222,53 +1226,77 @@ void kvs_full_read(char *cmd, char *key, char *value){
     char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
     if(addr == MAP_FAILED){
         perror("mmap error");
+        close(fd);
         return ;
     }
 
 
     char *p = addr;
     char *end = addr + len;
-    while(p < end){
-        int key_len = 0, value_len = 0;
-        if(strncmp(p, "key_len: ", 9) == 0){
-            int n = 0;
-            sscanf(p, "key_len: %d%n",&key_len, &n);
-            p += n;
-            while(p < end && (*p == '\r' || *p == '\n')) p++;
-        }
-        if(strncmp(p, "key: ", 5) == 0){
-            p += 5;
-            memcpy(key, p, key_len);
-            p += key_len;
-            while(p < end && (*p == '\r' || *p == '\n')) p++;
-        }
-        if(strncmp(p, "value_len: ", 11) == 0){
-            int n = 0;
-            sscanf(p, "value_len: %d%n",&value_len, &n);
-            p += n;
-            while(p < end && (*p == '\r' || *p == '\n')) p++;
-        }
-        if(strncmp(p, "value: ", 7) == 0){
-            p += 7;
-            memcpy(value, p, value_len);
-            p += value_len;
-            while(p < end && (*p == '\r' || *p == '\n')) p++;
-        }
-        if(key_len > 0 && value_len > 0){
-            if(strncmp(server_cfg.storage_structure, "array", 5) == 0){
-                cmd = "SET";
-            }else if(strncmp(server_cfg.storage_structure, "rbtree", 6) == 0){
-                cmd = "RSET";
-            }else if(strncmp(server_cfg.storage_structure, "hash", 4) == 0){
-                cmd = "HSET";
-            }else if(strncmp(server_cfg.storage_structure, "skiptable", 9) == 0){
-                cmd = "SSET";
-            }
-            kvs_txt_load(cmd, key, value, key_len, value_len);
-        }
+
+    uint32_t crc_exp, pack_len, count_hdr;;
+    memcpy(&crc_exp, p, 4);
+    memcpy(&pack_len,  addr + 4,  4);
+    memcpy(&count_hdr, addr + 12, 4);
+
+    if (memcmp(addr + 8, "V1.0", 4) != 0) {
+        fprintf(stderr, "[load] bad version, refuse\n"); goto out;
     }
-    close(fd);
+    if (len != 16 + pack_len) {
+        fprintf(stderr, "[load] truncated: file=%zu expect=%u\n",
+                len, 16 + pack_len);
+        goto out;
+    }
+
+    uint32_t crc_real = crc32(0L, p + 4, (uInt)(end - p - 4));
+    if(crc_exp != crc_real) {printf("crc check --> not match\n"); goto out;}
+
+    static char s_key[64 * 1024] = {0}; 
+    static char s_value[64 * 1024] = {0};
+
+    uint32_t loaded = 0, bad = 0;
+
+    p += 16;
+    while(p + 12 <= end){
+        uint32_t crc_single_exp;
+        memcpy(&crc_single_exp, p, 4);
+        p += 4;
+
+        uint32_t klen; uint32_t vlen;
+        memcpy(&klen, p, 4);
+        if (klen == 0 || klen >= sizeof(s_key) || p + 4 + klen + 4 > end) {
+            fprintf(stderr, "[load] bad klen=%u at %zu, stop\n", klen, (size_t)(p - addr));
+            break;
+        }
+        memcpy(s_key, p + 4, klen);
+
+        memcpy(&vlen, p + 4 + klen, 4);
+        if (vlen >= sizeof(s_value) || p + 4 + klen + 4 + vlen > end) {
+            fprintf(stderr, "[load] bad vlen=%u at %zu, stop\n", vlen, (size_t)(p - addr));
+            break;
+        }
+        memcpy(s_value, p + 4 + klen + 4, vlen);
+        
+        s_key[klen] = '\0';
+        s_value[vlen] = '\0';
+
+        uint32_t crc_single_real = crc32(0L, p, (uInt)(p + 4 + klen + 4 + vlen - p));
+        
+        if(crc_single_exp != crc_single_real){ printf("single crc check not match\n"); bad++; break;}
+        
+        kvs_txt_load(cname, s_key, s_value, klen, vlen);
+        loaded++;
+
+        p += 4 + klen + 4 + vlen;
+    }
+    // fprintf(stderr, "[load] full snapshot: loaded=%u bad=%u (header count=%u)\n",
+    //         loaded, bad, count_hdr);
+
+    if (loaded != count_hdr)
+        fprintf(stderr, "[load] count mismatch: loaded=%u header=%u\n", loaded, count_hdr);
+out:
     munmap(addr, len);
+    close(fd);
 }
 
 static int add_save_flag = 0;

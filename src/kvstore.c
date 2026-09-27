@@ -1006,7 +1006,9 @@ int kvs_protocol(char *msg, int length, char *response){
 
 
         if (total_response_len + resp_used < BUFFER_LENGTH) {
-            memcpy(response + total_response_len, single_response, resp_used);
+            if(response != NULL){
+                memcpy(response + total_response_len, single_response, resp_used);
+            }
             total_response_len += resp_used;
         }else {
             // fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
@@ -1141,9 +1143,7 @@ void kvs_add_read(char *cmd, char *key, char *value){
         perror("mmap error");
         return ;
     }
-    
-    char *p = addr;
-    char *end = addr + len;
+
     
     char *tmp = NULL;
     if(server_cfg.use_mempool == 1){
@@ -1151,23 +1151,39 @@ void kvs_add_read(char *cmd, char *key, char *value){
     }else{
         tmp = calloc(1, 1024 * 1024 * 5);
     }
-    int stop_save = 0;
-    load_saved_msg = stop_save;
 
-    const size_t CHUNK = 256 * 1024;
-    size_t off   = 0;
-    int    calls = 0;
+    load_saved_msg = 0;
 
-    while (off < len) {
-        size_t n = len - off;
-        if (n > CHUNK) n = CHUNK;
+    char *p = addr;
+    char *end = addr + len;
+    int ok = 0; int bad = 0;
 
-        kvs_protocol(addr + off, (int)n, tmp);
+    while (p + 4 <= end) {
+        uint32_t crc_exp;
+        memcpy(&crc_exp, p, 4);
 
-        off += n;
-        calls++;
-        if ((calls % 32) == 0) fprintf(stderr, "[load] %zu / %zu bytes\n", off, len);
+        int plen = kvs_is_complete(p + 4, (int)(end - p - 4));
+        if (plen <= 0) {
+            fprintf(stderr, "[load] tail incomplete at offset %zu (%zd bytes left)\n",
+                    (size_t)(p - addr), (ssize_t)(end - p));
+            break;
+        }
+
+        uint32_t crc_real = crc32(0L, p + 4, plen);
+        if(crc_exp != crc_real){
+            fprintf(stderr, "[load] record crc mismatch at offset %zu (file=%08x calc=%08x)\n",
+                    (size_t)(p - addr), crc_exp, crc_real);
+            bad++;
+            break; 
+        }
+
+        kvs_protocol(p + 4, plen, NULL);
+        p += 4 + plen;
+        ok++;
     }
+
+    // fprintf(stderr, "[load] aof replay: ok=%d bad=%d, consumed %zu / %zu bytes\n",
+    //         ok, bad, (size_t)(p - addr), len);
 
     load_saved_msg = 1;
     munmap(addr, len);

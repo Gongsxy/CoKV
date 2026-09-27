@@ -17,7 +17,8 @@ typedef struct hashtable_s kvs_hash_t;
 #define CRC_LEN						4
 #define KEY_VALUE_OFF				4
 #define VERSION_OFF					4
-#define FULL_HDR_LEN   (PACK_LEN_OFF + CRC_LEN + VERSION_OFF)
+#define COUNT_OFF					4
+#define FULL_HDR_LEN   (PACK_LEN_OFF + CRC_LEN + VERSION_OFF + COUNT_OFF)
 
 
 //Connection 
@@ -259,7 +260,7 @@ static int _serialize_size(kvs_hash_t *hash) {
     return total;
 }
 
-int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length){
+int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length, uint32_t count){
     if (!hash || !msg ) return -1;
 
 	char *payload = msg + FULL_HDR_LEN;
@@ -298,7 +299,9 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length){
 
 	uint32_t pack_len = (uint32_t)(p - payload);  
 	memcpy(msg + CRC_LEN, &pack_len, PACK_LEN_OFF);
-	memcpy(msg + CRC_LEN + PACK_LEN_OFF, "FV10", VERSION_OFF);
+
+	memcpy(msg + CRC_LEN + PACK_LEN_OFF, "V1.0", VERSION_OFF);
+	memcpy(msg + CRC_LEN + PACK_LEN_OFF + VERSION_OFF, &count, COUNT_OFF);
 
 	uint32_t crc_total = (uint32_t)crc32(0L, msg + CRC_LEN, (uInt)(p - msg - CRC_LEN));
 	memcpy(msg, &crc_total, CRC_LEN);

@@ -480,6 +480,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                     break;
                 }
 
+                uint32_t count = (uint32_t)kvs_hash_count(globle_hash);
+
+                printf("count:%d\n", count);
+
                 int hash_length = kvs_hash_save(globle_hash, tmp, 1024 * 1024 * 10);
 
                 if (hash_length <= 0) {

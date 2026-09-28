@@ -452,9 +452,29 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
         case KVS_CMD_INFO:{
+            // int n = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
+            // length = sprintf(response, "+storage:%s count:%d hash:%p\r\n",
+            //                  server_cfg.storage_structure, n, (void *)globle_hash);
             int n = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
-            length = sprintf(response, "+storage:%s count:%d hash:%p\r\n",
-                             server_cfg.storage_structure, n, (void *)globle_hash);
+            int cap = 0, maxchain = 0, i;
+            unsigned long idx_bytes = 0;
+
+            if (globle_hash != NULL) {
+                cap = globle_hash->max_slots;
+                idx_bytes = (unsigned long)cap * sizeof(hashnode_t *);
+                for (i = 0; i < cap; i++) {
+                    int len = 0;
+                    hashnode_t *nd = globle_hash->nodes[i];
+                    while (nd) { len++; nd = nd->next; }
+                    if (len > maxchain) maxchain = len;
+                }
+            }
+
+            length = sprintf(response,
+                "+storage:%s count:%d max_slots:%d avg_chain:%.2f max_chain:%d index_bytes:%lu\r\n",
+                server_cfg.storage_structure, n, cap,
+                (cap > 0) ? (double)n / cap : 0.0, maxchain, idx_bytes);
+            break;
             break;
         }
         case KVS_CMD_SAVE:{
@@ -1351,7 +1371,6 @@ int main(int argc, char const *argv[]){
     ntyco_start(&server_cfg, &gr);
     
     dest_kvs();
-    kvs_push_destroy();
     mp_destory(pool);
     mp_destory(cmd_pool);
 

@@ -11,6 +11,9 @@
 #include "../src/kvstore.h"
 #include "../src/load_conf.h"
 
+
+#define TESTCASE_CMD_TOTAL 100000   /* 5w + 5w */
+#define TESTCASE_HALF      50000
 #define MAX_MSG_LENGTH		1024
 #define TIME_SUB_MS(tv1, tv2)  ((tv1.tv_sec - tv2.tv_sec) * 1000 + (tv1.tv_usec - tv2.tv_usec) / 1000)
 
@@ -66,158 +69,261 @@ int is_number(char *msg){//1 true 0 false
 }
 
 int send_num = 0;
-void testcase(int connfd){
+void testcase(int connfd)
+{
 	int length = 0;
 	int j = 0;
 	int total_num = 0;
+
 	char *send_mes = malloc(4096000);
-	// char *send_mes = malloc(4096);
 
-	size_t cap = 4096000; 
-    size_t len = 0;
+	size_t cap = 4096000;
+	size_t len = 0;
 
-		for(total_num = 0; total_num < 100000; total_num ++){
+	for (total_num = 0; total_num < 50000; total_num++) {
 
-			if(j == 10){
-				j = 0;
+		if (j == 10) {
+			j = 0;
+		}
+		char msg[4096] = {0};
+		char tmp[4096] = {0};
+		char tcopy[4096] = {0};
+
+		char cmd_tmp[128] = {0};
+		int idx = 0;
+
+		// get cmd
+		strcpy(tmp, "SET");
+		tmp[strcspn(tmp, "\n")] = '\0';
+		int c_len = strlen(tmp);
+		memcpy(cmd_tmp, tmp, c_len);
+
+		int cmd_size = snprintf(NULL, 0, "$%d\r\n%s\r\n", c_len, tmp);
+		char *cmd = malloc(cmd_size + 1);
+		sprintf(cmd, "$%d\r\n%s\r\n", c_len, tmp);
+		memcpy(msg, cmd, strlen(cmd));
+		idx++;
+		memset(tmp, 0, 4096);
+
+		// get key
+		sprintf(tmp, "%s%d", test_key, total_num);
+		strcat(tcopy, tmp);
+
+		idx++;
+		int k_len = strlen(tcopy);
+		int key_size = snprintf(NULL, 0, "$%d\r\n%s\r\n", k_len, tcopy);
+		char *key = malloc(key_size + 1);
+		if (k_len == 0) {
+			snprintf(key, key_size + 1, "$0\r\n\r\n");
+		} else {
+			sprintf(key, "$%d\r\n%s\r\n", k_len, tcopy);
+		}
+		strcat(msg, key);
+		memset(tcopy, 0, 4096);
+
+		// match cmd that need value
+		int i = 0;
+		int match = 0;
+		for (i = 0; i < 8; i++) {
+			if (strcmp(cmd_tmp, cmds[i]) == 0) {
+				match = 1;
+				break;
 			}
-			// printf("total_num: %d\n",total_num);
-			char msg[4096] = {0};
-			char tmp[4096] = {0};
-			char tcopy[4096] = {0};
+		}
 
-
-			char cmd_tmp[128] = {0};
-			int exit_status = 0;
-			int idx = 0;
-
-			// get cmd
-			// strcpy(tmp,test_cmd[j]);
-			strcpy(tmp,"SET");
-			tmp[strcspn(tmp, "\n")] = '\0';
-			int c_len = strlen(tmp);
-			memcpy(cmd_tmp, tmp, c_len);
-
-			int cmd_size = snprintf(NULL,0,"$%d\r\n%s\r\n",c_len,tmp);
-			char *cmd = malloc(cmd_size + 1);
-			sprintf(cmd, "$%d\r\n%s\r\n",c_len, tmp);
-			// printf("cmd:%s\n",cmd);
-			memcpy(msg, cmd, strlen(cmd));
-			msg[strlen(cmd)] = '\0';
-			// length += strlen(cmd);
-			idx++;
-			memset(tmp, 0, 4096);
-			
-			// get key
-
-			sprintf(tmp, "%s%d", test_key, total_num);
+		if (match) {
+			if (j == 3 || j == 7) {
+				sprintf(tmp, "%s%d", test_value_mod, total_num);
+			} else {
+				sprintf(tmp, "%s%d", test_value, total_num);
+			}
 
 			strcat(tcopy, tmp);
-			
+
 			idx++;
-			int k_len = strlen(tcopy);
-			// length += k_len;
-			int key_size = snprintf(NULL,0, "$%d\r\n%s\r\n",k_len,tcopy);
-			char *key = malloc(key_size + 1);
-			if(k_len == -1){
-				snprintf(key, k_len, "$%d\r\n\r\n",k_len);
-			}else if(k_len == 0){
-				snprintf(key, k_len, "$%d\r\n",k_len);
-			}else{
-				sprintf(key, "$%d\r\n%s\r\n",k_len, tcopy);
+			int v_len = strlen(tcopy);
+			int value_size = snprintf(NULL, 0, "$%d\r\n%s\r\n", v_len, tcopy);
+			char *value = malloc(value_size + 1);
+			if (v_len == 0) {
+				snprintf(value, value_size + 1, "$0\r\n\r\n");
+			} else {
+				sprintf(value, "$%d\r\n%s\r\n", v_len, tcopy);
 			}
-			// length += strlen(key);
-			strcat(msg, key);
+			strcat(msg, value);
 			memset(tcopy, 0, 4096);
-			
-			// match cmd that need value
-			int i = 0;
-			int match = 0;
-			for(i = 0; i < 8; i ++){
-				
-				if(strcmp(cmd_tmp, cmds[i]) == 0){
-					match = 1;
-					break;
-				}
-			} 
-			
-			if(match){
-				if(j == 3 || j == 7){
-					// strcpy(tmp, test_value_mod);
-					sprintf(tmp, "%s%d", test_value_mod, total_num);
-				}else{
-					// strcpy(tmp, test_value);
-					sprintf(tmp, "%s%d", test_value, total_num);
-				}
-					
-				strcat(tcopy, tmp);
-
-				idx++;
-				int v_len = strlen(tcopy);
-				// length += v_len;
-				int value_size = snprintf(NULL,0,"$%d\r\n%s\r\n",v_len,tcopy);
-				char *value = malloc(value_size + 1);
-				
-				if(v_len == -1){
-					snprintf(value, v_len, "$%d\r\n\r\n",v_len);
-				}else if(v_len == 0){
-					snprintf(value, v_len, "$%d\r\n",v_len);
-				}else{
-					sprintf(value, "$%d\r\n%s\r\n",v_len, tcopy);
-				}
-				// length += strlen(value);
-				strcat(msg, value);
-				memset(tcopy, 0, 4096);
-				free(value);
-			}
-
-			char final_send_mes[4096] = {0};
-			
-			// send request
-
-			sprintf(final_send_mes, "*%d\r\n", idx);
-			strcat(final_send_mes, msg);
-
-			size_t need = strlen(final_send_mes);
-			if (len + need + 1 > cap) {
-				cap = cap * 2 + need;     
-				send_mes = realloc(send_mes, cap);
-			}
-			// strcat(send_mes, final_send_mes);
-			memcpy(send_mes + len, final_send_mes, need); 
-			len += need;
-
-			send_num = len;
-			free(cmd);
-			free(key);
-
-			j++;
-			
-			if(total_num == 49999){
-				// printf("len=%ld\n", strlen(send_mes));
-
-				char *tmp = malloc(len + 32);
-				length = strlen(send_mes);
-				
-				send_msg(connfd, send_mes, length);
-				memset(send_mes, 0, length);
-				len = 0;
-
-				printf("has send 50000 message, press to continue\n");
-				fgetc(stdin);
-				free(tmp);
-				continue;
-			}
-			
+			free(value);
 		}
-		// printf("len=%ld\n", strlen(send_mes));
 
-		char *tmp = malloc(len + 32);
-		length = strlen(send_mes);
-		
+		char final_send_mes[4096] = {0};
+
+		// send request
+		sprintf(final_send_mes, "*%d\r\n", idx);
+		strcat(final_send_mes, msg);
+
+		size_t need = strlen(final_send_mes);
+		if (len + need + 1 > cap) {
+			cap = cap * 2 + need;
+			send_mes = realloc(send_mes, cap);
+		}
+		memcpy(send_mes + len, final_send_mes, need);
+		len += need;
+	}
+
+	{
+		int      n  = 0;
+		char     rbuf[65536];
+		struct timeval t0, t1;
+		struct timeval rto = { 5, 0 };
+
+		setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+
+		length = (int)len;
+		send_num += 50000;
+
+		gettimeofday(&t0, NULL);
 		send_msg(connfd, send_mes, length);
-		free(tmp);
-	
+
+		while (n < 50000) {
+			int     k;
+			ssize_t r = recv_msg(connfd, rbuf, sizeof rbuf);
+			if (r <= 0) break;
+			for (k = 0; k < r; k++)
+				if (rbuf[k] == '\n') n++;
+		}
+		gettimeofday(&t1, NULL);
+
+		long cost_ms = TIME_SUB_MS(t1, t0);
+		printf("cmd number: %d\nsuccessed: %d\ntime: %ld ms\nQPS: %.2f\n",
+		       50000, n, cost_ms, cost_ms > 0 ? 50000 * 1000.0 / cost_ms : 0.0);
+		fflush(stdout);
+	}
+
+	getchar();
+
+	memset(send_mes, 0, len);
+	len = 0;
+
+
+	for (total_num = 50000; total_num < 100000; total_num++) {
+
+		if (j == 10) {
+			j = 0;
+		}
+		char msg[4096] = {0};
+		char tmp[4096] = {0};
+		char tcopy[4096] = {0};
+
+		char cmd_tmp[128] = {0};
+		int idx = 0;
+
+		// get cmd
+		strcpy(tmp, "SET");
+		tmp[strcspn(tmp, "\n")] = '\0';
+		int c_len = strlen(tmp);
+		memcpy(cmd_tmp, tmp, c_len);
+
+		int cmd_size = snprintf(NULL, 0, "$%d\r\n%s\r\n", c_len, tmp);
+		char *cmd = malloc(cmd_size + 1);
+		sprintf(cmd, "$%d\r\n%s\r\n", c_len, tmp);
+		memcpy(msg, cmd, strlen(cmd));
+		idx++;
+		memset(tmp, 0, 4096);
+
+		// get key
+		sprintf(tmp, "%s%d", test_key, total_num);
+		strcat(tcopy, tmp);
+
+		idx++;
+		int k_len = strlen(tcopy);
+		int key_size = snprintf(NULL, 0, "$%d\r\n%s\r\n", k_len, tcopy);
+		char *key = malloc(key_size + 1);
+		if (k_len == 0) {
+			snprintf(key, key_size + 1, "$0\r\n\r\n");
+		} else {
+			sprintf(key, "$%d\r\n%s\r\n", k_len, tcopy);
+		}
+		strcat(msg, key);
+		memset(tcopy, 0, 4096);
+
+		// match cmd that need value
+		int i = 0;
+		int match = 0;
+		for (i = 0; i < 8; i++) {
+			if (strcmp(cmd_tmp, cmds[i]) == 0) {
+				match = 1;
+				break;
+			}
+		}
+
+		if (match) {
+			if (j == 3 || j == 7) {
+				sprintf(tmp, "%s%d", test_value_mod, total_num);
+			} else {
+				sprintf(tmp, "%s%d", test_value, total_num);
+			}
+
+			strcat(tcopy, tmp);
+
+			idx++;
+			int v_len = strlen(tcopy);
+			int value_size = snprintf(NULL, 0, "$%d\r\n%s\r\n", v_len, tcopy);
+			char *value = malloc(value_size + 1);
+			if (v_len == 0) {
+				snprintf(value, value_size + 1, "$0\r\n\r\n");
+			} else {
+				sprintf(value, "$%d\r\n%s\r\n", v_len, tcopy);
+			}
+			strcat(msg, value);
+			memset(tcopy, 0, 4096);
+			free(value);
+		}
+
+		char final_send_mes[4096] = {0};
+
+		// send request
+		sprintf(final_send_mes, "*%d\r\n", idx);
+		strcat(final_send_mes, msg);
+
+		size_t need = strlen(final_send_mes);
+		if (len + need + 1 > cap) {
+			cap = cap * 2 + need;
+			send_mes = realloc(send_mes, cap);
+		}
+		memcpy(send_mes + len, final_send_mes, need);
+		len += need;
+	}
+
+	/* ---------------- 第二批：发送 + 收满 5w 条回复 + 打印 ---------------- */
+	{
+		int      n  = 0;
+		char     rbuf[65536];
+		struct timeval t0, t1;
+		struct timeval rto = { 5, 0 };
+
+		setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+
+		length = (int)len;
+		send_num += 50000;
+
+		gettimeofday(&t0, NULL);
+		send_msg(connfd, send_mes, length);
+
+		while (n < 50000) {
+			int     k;
+			ssize_t r = recv_msg(connfd, rbuf, sizeof rbuf);
+			if (r <= 0) break;
+			for (k = 0; k < r; k++)
+				if (rbuf[k] == '\n') n++;
+		}
+		gettimeofday(&t1, NULL);
+
+		long cost_ms = TIME_SUB_MS(t1, t0);
+		printf("cmd number: %d\nsuccessed: %d\ntime: %ld ms\nQPS: %.2f\n",
+		       50000, n, cost_ms, cost_ms > 0 ? 50000 * 1000.0 / cost_ms : 0.0);
+		fflush(stdout);
+	}
+
+	free(send_mes);
 }
 
 
@@ -468,14 +574,6 @@ int main(int argc, char *argv[]) {
 	}else if(strcmp(argv[1], "2") == 0) {
 		testcase_get(connfd);
 		return 0;
-	}
-	printf("enter save\n");
-	if(cfg.full_save_flag == 1){
-		char tmp[128] = {0};
-		fgets(tmp, sizeof(tmp), stdin);
-		if(strcmp(tmp, "save\n") == 0) {
-			send_msg(connfd, "*1\r\n$4\r\nSAVE\r\n", 14);
-        }
 	}
 	
 	fgetc(stdin);

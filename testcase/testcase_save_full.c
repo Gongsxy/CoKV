@@ -353,12 +353,32 @@ void testcase(int connfd){
 		
 		
     }
-	printf("has send\n");
 
 	char *tmp = malloc(len + 32);
 	length = strlen(send_mes);
-	
+
+	int n = 0;
+	char rbuf[65536];
+	struct timeval t0, t1;
+	struct timeval rto = { 5, 0 };
+	setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+
+	gettimeofday(&t0, NULL);
 	send_msg(connfd, send_mes, length);
+
+	while (n < 100000) {                          /* 收一条 ++ 一次 */
+		int i;
+		ssize_t r = recv_msg(connfd, rbuf, sizeof rbuf);
+		if (r <= 0) break;
+		for (i = 0; i < r; i++)
+			if (rbuf[i] == '\n') n++;
+	}
+	gettimeofday(&t1, NULL);
+
+	long cost_ms = TIME_SUB_MS(t1, t0);
+	printf("cmd number: %d\nsuccessed: %d\ntime: %ld ms\nQPS: %.2f\n",
+	       100000, n, cost_ms, cost_ms > 0 ? 100000 * 1000.0 / cost_ms : 0.0);
+	fflush(stdout);
 }
 
 
@@ -748,6 +768,8 @@ int main(int argc, char *argv[]) {
 	}else if(strcmp(argv[1], "2") == 0) {
 		testcase_get(connfd);
 		return 0;
+	}else if(strcmp(argv[1], "3") == 0) {
+		testcase_del(connfd);
 	}
 	if(cfg.full_save_flag == 1){
 		char tmp[128] = {0};

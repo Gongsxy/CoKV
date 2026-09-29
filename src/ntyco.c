@@ -20,12 +20,15 @@ char *write_command[] = {
 
 static struct mp_pool *pool = NULL;
 static Config cfg = {0};
+static void *s_storage;
+
 
 __g_rdma g_rdma = {0};
 __g_slave g_slave = {.fd = -1};
 
 extern int kvs_protocol(char *msg, int length, char *response);
 
+#if 1
 int load_save_mes(){
     if(cfg.add_save == 1){
         int add_save_fd = open(ADD_FILENAME, O_RDONLY);
@@ -43,7 +46,25 @@ int load_save_mes(){
         return full_save_fd;
     }else return -1; 
 }
+#else
+char load_save_mes(){
+    if(strcmp(cfg.storage_structure, "hash") == 0){
+        kvs_hash_t *hash = s_storage;
+        char mes[1024 * 1024] = {0};
 
+        uint32_t count = (uint32_t)kvs_hash_count(hash);
+        kvs_hash_save(hash, &mes, 1024 * 1024, count);
+
+        return mes;
+    }else if(strcmp(cfg.storage_structure, "array") == 0){
+        
+    }else if(strcmp(cfg.storage_structure, "skiplist") == 0){
+        
+    }
+}
+#endif
+
+#if 1
 size_t sync_mes_to_rdma(void){
 
     int fd = load_save_mes();
@@ -88,7 +109,34 @@ size_t sync_mes_to_rdma(void){
 // printf("[sync] read done %zu\n", total_read);
     return total_read;
 }
+#else 
+size_t sync_mes_to_rdma(void){
 
+    char mes[] = load_save_mes();
+    
+    if ((size_t)file_sz > g_rdma.buf_size){
+        fprintf(stderr,"快照大小%ld超过rdma buf上限%zu\n", (long)file_sz, g_rdma.buf_size);
+        return -1;
+    }
+
+    // 从磁盘读到master的rdma注册内存g_rdma.buf
+    size_t total_read = 0;
+    off_t off = 0;
+    while(total_read < (size_t)file_sz){
+        ssize_t ret = pread(fd, g_rdma.buf + total_read, (size_t)file_sz - total_read, off);
+        if(ret < 0){close(fd); perror("pread"); return -1;}
+        if(ret == 0) break; // eof
+        total_read += ret;
+        
+    }
+    if (total_read != file_sz){
+        perror("read snapshot fail");
+        return -1;
+    }
+
+    return total_read;
+}
+#endif
 int rdma_send_mes_to_slave(uint32_t length){
 
     if(g_slave.fd < 0){
@@ -251,21 +299,26 @@ void rdma_handshake(void *arg){
 
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
-    free(arg);
+    if(cfg.use_mempool == 0){
+        free(arg);
+    }
 
     if(cli_fd < 0){
         perror("read arg error");
         return ;
     }
     char *buf = NULL; char *response = NULL; char *capbuf = NULL;
+
+    size_t cap_alloc = 1024 * 1024;
+
     if(cfg.use_mempool == 1){
         buf = mp_alloc(pool, 64 * 1024);
         response = mp_alloc(pool, 1024 * 1024 * 1);
-        capbuf   = mp_alloc(pool, 1024 * 1024 * 1);
+        capbuf = mp_alloc(pool, 1024 * 1024 * 1);
     }else {
         buf = calloc(1, 64 * 1024);
         response = calloc(1, 1024 * 1024 * 1);
-        capbuf   = calloc(1, 1024 * 1024 * 1);
+        capbuf = calloc(1, 1024 * 1024 * 1);
     }
     if (!buf || !response || !capbuf) {
         if(cfg.use_mempool == 0){
@@ -291,7 +344,25 @@ void read_func(void *arg){
 
         static unsigned long long n = 0;
         if (info != NULL && info->len > 0) {
-            cap_len = (int)info->len;
+            int need = (int)info->len;
+            if ((size_t)need > cap_alloc) {            /* 不够就先扩 */
+                char *p;
+			    size_t new_alloc = (size_t)need * 2;
+                if(cfg.use_mempool == 1){
+                    p = mp_alloc(pool, new_alloc);
+                }else {
+                    p = realloc(capbuf, new_alloc);
+                }
+                if (p == NULL) {
+                    fprintf(stderr, "capbuf realloc %zu fail\n", new_alloc);
+                    nty_close(cli_fd);
+                    return;
+                }
+                capbuf = p;
+			    cap_alloc = new_alloc;
+		    }
+            cap_len = need;
+
             memcpy(capbuf, info->resp_info, info->len); 
             if( (strncmp(capbuf, "*3\r\n$3\r\nSET\r\n", 13) == 0 || strncmp(capbuf, "*3\r\n$3\r\nMOD\r\n", 13) == 0) && g_slave.fd >= 0){
                 nty_send(g_slave.fd, capbuf, info->len, 0);
@@ -302,20 +373,20 @@ void read_func(void *arg){
             int ret = nty_send(cli_fd, response, length, 0);
         }
 
-        if(cfg.use_mempool == 0){
-            static uint64_t last_trim_ms = 0;
-            struct timespec ts;
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-            uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-            if (now_ms - last_trim_ms >= 1000) {        
-                last_trim_ms = now_ms;
-                malloc_trim(0);
-            }
+        
+        static uint64_t last_trim_ms = 0;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+        if (now_ms - last_trim_ms >= 1000) {        
+            last_trim_ms = now_ms;
+            malloc_trim(0);
         }
+        
     }
     nty_close(cli_fd);
+    malloc_trim(0); 
     if(cfg.use_mempool == 0){
-        malloc_trim(0); 
         free(buf);    
         free(response);
         free(capbuf);
@@ -325,7 +396,9 @@ void read_func(void *arg){
 void accept_func(void *arg){
 
     int port = *(int *)arg;
-    free(arg);
+    if(cfg.use_mempool == 0){
+        free(arg);
+    }
     if(!port) return ;
     int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
     if(fd < 0){

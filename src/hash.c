@@ -50,16 +50,12 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 
 	cfg_init();
 	hashnode_t *node;
-	if(cfg.use_mempool == 1){
-		node = (hashnode_t*)mp_alloc(pool, sizeof(hashnode_t));
-	}else node = (hashnode_t*)malloc(sizeof(hashnode_t));
+	node = (hashnode_t*)malloc(sizeof(hashnode_t));
 	if (!node) return NULL;
 	
 	cfg_init();
 
-	if(cfg.use_mempool == 1){
-		node->key = mp_alloc(pool, key_len + 1);
-	}else node->key = calloc(1, key_len + 1);
+	node->key = calloc(1, key_len + 1);
 	if(!node->key) {
 		free(node);
 		return NULL;
@@ -69,13 +65,11 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 	node->key_len = key_len;
 	
 
-	if(cfg.use_mempool == 1){
-		node->value = mp_alloc(pool, value_len + 1);
-	}else node->value = calloc(1, value_len + 1);
+	node->value = calloc(1, value_len + 1);
 	// node->value = m_malloc(value_len + 1);
 	if(!node->value) {
 		free(node->key);
-        free(node);
+		free(node);
 		return NULL;
 	}
 
@@ -89,12 +83,9 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 
 static void _free_node(hashnode_t *node) {
     if (!node) return;
-    free(node->key);
-    free(node->value);
-    free(node);
-	// m_reset(node->key);
-    // m_reset(node->value);
-    // m_reset(node);
+	free(node->key);
+	free(node->value);
+	free(node);
 }
 
 
@@ -107,9 +98,7 @@ int kvs_hash_create(kvs_hash_t *hash) {
 
 	cfg_init();
 
-	if(cfg.use_mempool == 1){
-		hash->nodes = (hashnode_t**)mp_alloc(pool, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
-	}else hash->nodes = (hashnode_t**)calloc(1, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
+	hash->nodes = (hashnode_t**)calloc(1, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	// hash->nodes = (hashnode_t**)m_malloc( sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	if (!hash->nodes) return -1;
 
@@ -138,8 +127,9 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 			
 		}
 	}
+
 	free(hash->nodes);
-	// m_reset(hash->nodes);
+
     hash->nodes = NULL;
     hash->count = 0;
 	
@@ -254,19 +244,14 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
         node = node->next;
     }
 
-    if (!node) return 1;
-
-    free(node->value);  
-	// m_reset(node->value);
+    if (!node) return 1; 
 
 	char *new_value;
-
-	cfg_init();
-	if(cfg.use_mempool == 1){
-    	new_value = (char *)mp_alloc(pool, value_len + 1);
-	}else new_value = (char *)calloc(1, value_len + 1);
+	new_value = (char *)calloc(1, value_len + 1);
 	// char *new_value = (char *)m_malloc(value_len + 1);
     if (!new_value) return -2;
+
+	free(node->value);
     memcpy(new_value, value, value_len);
 
     node->value = new_value;

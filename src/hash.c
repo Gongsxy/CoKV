@@ -8,6 +8,8 @@
 #include <zlib.h>
 
 #include "kvstore.h"
+#include "load_conf.h"
+#include "mem_pool.h"
 
 
 typedef struct hashtable_s kvs_hash_t;
@@ -20,6 +22,17 @@ typedef struct hashtable_s kvs_hash_t;
 #define COUNT_OFF					4
 #define FULL_HDR_LEN   (PACK_LEN_OFF + CRC_LEN + VERSION_OFF + COUNT_OFF)
 
+
+static Config cfg = {0};
+static struct mp_pool *pool;
+void cfg_init(void) {
+    static int done = 0;
+    if (done) return;
+    done = 1;
+
+	load_config("config/server.conf", &cfg);
+    pool = mp_create(4096);
+}
 
 //Connection 
 // 'C' + 'o' + 'n'
@@ -35,11 +48,18 @@ static int _hash(char *key, int key_len, int size) {
 
 static hashnode_t *_create_node(char *key, char *value, int key_len, int value_len) {
 
-	hashnode_t *node = (hashnode_t*)malloc(sizeof(hashnode_t));
+	cfg_init();
+	hashnode_t *node;
+	if(cfg.use_mempool == 1){
+		node = (hashnode_t*)mp_alloc(pool, sizeof(hashnode_t));
+	}else node = (hashnode_t*)malloc(sizeof(hashnode_t));
 	if (!node) return NULL;
 	
-	// node->key = kvs_malloc(strlen(key) + 1);
-	node->key = calloc(1, key_len + 1);
+	cfg_init();
+
+	if(cfg.use_mempool == 1){
+		node->key = mp_alloc(pool, key_len + 1);
+	}else node->key = calloc(1, key_len + 1);
 	if(!node->key) {
 		free(node);
 		return NULL;
@@ -48,7 +68,10 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 	memcpy(node->key, key, key_len);
 	node->key_len = key_len;
 	
-	node->value = calloc(1, value_len + 1);
+
+	if(cfg.use_mempool == 1){
+		node->value = mp_alloc(pool, value_len + 1);
+	}else node->value = calloc(1, value_len + 1);
 	// node->value = m_malloc(value_len + 1);
 	if(!node->value) {
 		free(node->key);
@@ -82,7 +105,11 @@ int kvs_hash_create(kvs_hash_t *hash) {
 
 	memset(hash, 0, sizeof(kvs_hash_t));
 
-	hash->nodes = (hashnode_t**)calloc(1, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
+	cfg_init();
+
+	if(cfg.use_mempool == 1){
+		hash->nodes = (hashnode_t**)mp_alloc(pool, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
+	}else hash->nodes = (hashnode_t**)calloc(1, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	// hash->nodes = (hashnode_t**)m_malloc( sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	if (!hash->nodes) return -1;
 
@@ -232,7 +259,12 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
     free(node->value);  
 	// m_reset(node->value);
 
-    char *new_value = (char *)calloc(1, value_len + 1);
+	char *new_value;
+
+	cfg_init();
+	if(cfg.use_mempool == 1){
+    	new_value = (char *)mp_alloc(pool, value_len + 1);
+	}else new_value = (char *)calloc(1, value_len + 1);
 	// char *new_value = (char *)m_malloc(value_len + 1);
     if (!new_value) return -2;
     memcpy(new_value, value, value_len);

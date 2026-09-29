@@ -1327,10 +1327,14 @@ int main(int argc, char const *argv[]){
     load_config("config/server.conf", &server_cfg);
     // uLong crc = crc32(0L, Z_NULL, 0);
 
-    if(server_cfg.use_mempool == 0){
-        mallopt(M_MMAP_THRESHOLD, 128 * 1024);
-        mallopt(M_TRIM_THRESHOLD, 128 * 1024);
-    }
+    // if(server_cfg.use_mempool == 0){
+    //     mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+    //     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+    // }
+
+    mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+    mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+
 
     signal(SIGPIPE, SIG_IGN);
     memset(&add_params, 0, sizeof(add_params));
@@ -1365,9 +1369,11 @@ int main(int argc, char const *argv[]){
     }
     rdma_init(&gr);
     if(resp_capture() < 0) return -1;
-    if(server_cfg.use_mempool == 0){
-        malloc_trim(0);
-    }
+    // if(server_cfg.use_mempool == 0){
+    //     malloc_trim(0);
+    // }
+    malloc_trim(0);
+
     ntyco_start(&server_cfg, &gr);
     
     dest_kvs();

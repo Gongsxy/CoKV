@@ -783,8 +783,21 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
     return i;
 }
 
+static int g_msg_has_crc = 0;
 
+static uint32_t get_be32(const unsigned char *p)
+{
+	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+	       ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+}
 
+static uint32_t get_le32(const unsigned char *p)
+{
+	return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) |
+	       ((uint32_t)p[1] << 8)  |  (uint32_t)p[0];
+}
+
+#if 0
 int kvs_is_complete(char *msg, int length){
 
     if (length < 4 || msg[0] != '*') return 0;
@@ -818,7 +831,60 @@ int kvs_is_complete(char *msg, int length){
     }
     return j;
 }
+#else 
+int kvs_is_complete(char *msg, int length)
+{
+	int off = 0;
 
+	if (length <= 0) return 0;
+
+	/* ---- 同步流：先跳过 4B CRC32 校验码 ---- */
+	if (g_msg_has_crc) {
+		if (length < 4 + 4)          /* CRC + 至少 "*0\r\n" */
+			return 0;            /* 还不够，等更多数据 */
+		off = 4;
+	}
+
+	if (length - off < 4 || msg[off] != '*') return 0;
+
+	int j = off + 1;
+	char tbuf[128] = {0};
+
+	/* 取 *<count>\r\n 里的 count */
+	while (j < length && msg[j] != '\r') {
+		if (j - off - 1 >= (int)sizeof(tbuf) - 1) return 0;   /* 防越界 */
+		tbuf[j - off - 1] = msg[j];
+		j++;
+	}
+	if (j + 1 >= length || msg[j] != '\r' || msg[j + 1] != '\n') return 0;
+
+	int count = atoi(tbuf);
+	if (count <= 0) return 0;
+	j += 2;
+
+	for (int k = 0; k < count; k++) {
+		if (j >= length || msg[j] != '$') return 0;
+		j++;
+
+		char lenbuf[128] = {0};
+		int li = 0;
+		while (j < length && msg[j] != '\r') {
+			if (li >= (int)sizeof(lenbuf) - 1) return 0;   /* 防越界 */
+			lenbuf[li++] = msg[j++];
+		}
+		if (j + 1 >= length || msg[j] != '\r' || msg[j + 1] != '\n') return 0;
+
+		int slen = atoi(lenbuf);
+		if (slen < 0) return 0;
+		j += 2;
+
+		if (j + slen + 2 > length) return 0;
+		j += slen + 2;
+	}
+
+	return j;   /* 返回已消费的总字节数：有 CRC 时天然包含了那 4B，调用方直接 j 往后走即可 */
+}
+#endif
 
 
 void sync_mes_init(void) {
@@ -835,8 +901,6 @@ void sync_mes_init(void) {
 
 int kvs_protocol(char *msg, int length, char *response){
     if (msg == NULL || response == NULL || length <= 0) {       
-        fprintf(stderr, "[kvs_protocol] 参数非法: msg=%p len=%d resp=%p\n",
-                (void *)msg, length, (void *)response);
         return -1;
     }
     int key_len = 0;
@@ -885,6 +949,12 @@ int kvs_protocol(char *msg, int length, char *response){
     while (mes_len > 0) {
 
         int packet_len = kvs_is_complete(mes, mes_len);
+        if (packet_len <= 0) {
+
+            g_msg_has_crc = (g_msg_has_crc == 1) ? 2 : 1;  
+            packet_len = kvs_is_complete(mes, mes_len);
+            if (packet_len <= 0) { g_msg_has_crc = 0; break; } 
+        }
         if (packet_len == 0) break; 
 
         if (packet_len < 0 || packet_len > mes_len) {

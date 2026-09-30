@@ -7,6 +7,7 @@
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
 #include "mem_pool.h"
 #include <zlib.h>
+#include <sodium.h>
 
 #include <signal.h>
 #include <malloc.h>
@@ -119,6 +120,9 @@ const char *response[] = {
 #define STATUS_OUT	0
 
 #define INIT STATUS_OUT;
+
+#define MAC_LEN crypto_auth_hmacsha256_BYTES
+static unsigned char g_hmac_key[crypto_auth_hmacsha256_KEYBYTES];
 
 
 static char *mes = NULL;
@@ -489,10 +493,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 }
                 char *tmp = NULL;
                 if(server_cfg.use_mempool == 1){
-                    tmp = mp_alloc(pool, 1024 * 1024 * 10);
+                    tmp = mp_alloc(pool, 1024 * 1024 * 10 + MAC_LEN);
                     
                 }else{
-                    tmp = calloc(1, 1024 * 1024 * 10);
+                    tmp = calloc(1, 1024 * 1024 * 10 + MAC_LEN);
                 }
                 if (!tmp) {
                     length = sprintf(response, "-ERR out of memory\r\n");
@@ -510,6 +514,17 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                         mp_large_free(pool, tmp);
                     }else free(tmp);
                     length = sprintf(response, "+OK\r\n");
+                    break;
+                }
+
+                if (crypto_auth_hmacsha256((unsigned char *)(tmp + hash_length),
+                           (const unsigned char *)tmp, hash_length,
+                           g_hmac_key) != 0) {
+                    close(full_fd); 
+                    if(server_cfg.use_mempool == 1){
+                        mp_large_free(pool, tmp);
+                    }else free(tmp); 
+                    length = sprintf(response,"-ERR hmac failed\r\n"); 
                     break;
                 }
 
@@ -533,7 +548,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
                 full_info->save_buf_ptr = tmp;
                 full_info->fd = full_fd;
 
-                io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length, 0);
+                io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length + MAC_LEN, 0);
                 io_uring_sqe_set_data(sqe_full, full_info);
 
                 int sub_ret = io_uring_submit(&full_ring);
@@ -1213,6 +1228,12 @@ void kvs_add_read(char *cmd, char *key, char *value){
 }
 
 
+#define FULL_HDR_SIZE  16
+#define FULL_OFF_CRC     0
+#define FULL_OFF_VER     8
+#define FULL_OFF_COUNT   12
+#define FULL_OFF_PACKLEN 4
+
 void kvs_full_read(char *cmd, char *key, char *value){
 
     int fd = open("config/full.txt", O_RDONLY);
@@ -1243,6 +1264,12 @@ void kvs_full_read(char *cmd, char *key, char *value){
         close(fd);
         return;   
     }
+
+    if (len < FULL_HDR_SIZE + MAC_LEN) {
+        fprintf(stderr, "[load] too small: %zu\n", len);
+        close(fd); return;
+    }
+
     char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
     if(addr == MAP_FAILED){
         perror("mmap error");
@@ -1250,33 +1277,54 @@ void kvs_full_read(char *cmd, char *key, char *value){
         return ;
     }
 
-
-    char *p = addr;
-    char *end = addr + len;
-
-    uint32_t crc_exp, pack_len, count_hdr;;
-    memcpy(&crc_exp, p, 4);
-    memcpy(&pack_len,  addr + 4,  4);
-    memcpy(&count_hdr, addr + 12, 4);
-
-    if (memcmp(addr + 8, "V1.0", 4) != 0) {
-        fprintf(stderr, "[load] bad version, refuse\n"); goto out;
-    }
-    if (len != 16 + pack_len) {
-        fprintf(stderr, "[load] truncated: file=%zu expect=%u\n",
-                len, 16 + pack_len);
+    size_t mac_off = len - MAC_LEN;
+    
+    unsigned char mac_calc[MAC_LEN];
+    if (crypto_auth_hmacsha256(mac_calc,(const unsigned char *)addr, mac_off,
+                               g_hmac_key) != 0) {
+        fprintf(stderr, "[load] hmac compute failed\n");
         goto out;
     }
 
-    uint32_t crc_real = crc32(0L, p + 4, (uInt)(end - p - 4));
-    if(crc_exp != crc_real) {printf("crc check --> not match\n"); goto out;}
+    if (sodium_memcmp(mac_calc, addr + mac_off, MAC_LEN) != 0) {
+        fprintf(stderr, "[load] MAC mismatch: file forged or key wrong\n");
+        goto out;                    /* 拒绝整份，保持当前数据不变 */
+    }
+    
+    uint32_t crc_exp, count_hdr, pack_len;
+    memcpy(&crc_exp,   addr + FULL_OFF_CRC, 4);
+    memcpy(&count_hdr, addr + FULL_OFF_COUNT, 4);
+    memcpy(&pack_len,  addr + FULL_OFF_PACKLEN, 4);
+
+    if (memcmp(addr + FULL_OFF_VER, "V1.0", 4) != 0) {
+        fprintf(stderr, "[load] bad version, refuse\n");
+        goto out;
+    }
+
+    if ((size_t)FULL_HDR_SIZE + (size_t)pack_len + MAC_LEN != len) {
+        fprintf(stderr, "[load] length mismatch: file=%zu expect=%zu (pack_len=%u)\n",
+                len, (size_t)FULL_HDR_SIZE + pack_len + MAC_LEN, pack_len);
+        goto out;
+    }
+
+    uint32_t crc_real = (uint32_t)crc32(0L,(const Bytef *)(addr + FULL_OFF_PACKLEN),
+                        (uInt)(FULL_HDR_SIZE + pack_len - FULL_OFF_PACKLEN));
+
+    if (crc_exp != crc_real) {
+        fprintf(stderr, "[load] header/data crc mismatch: file=%08x calc=%08x\n",
+                crc_exp, crc_real);
+        goto out;
+    }
+
+    char *p = addr + FULL_HDR_SIZE;
+    char *end = addr + FULL_HDR_SIZE + pack_len;
 
     static char s_key[64 * 1024] = {0}; 
     static char s_value[64 * 1024] = {0};
 
     uint32_t loaded = 0, bad = 0;
 
-    p += 16;
+    // p += 16;
     while(p + 12 <= end){
         uint32_t crc_single_exp;
         memcpy(&crc_single_exp, p, 4);
@@ -1284,16 +1332,16 @@ void kvs_full_read(char *cmd, char *key, char *value){
 
         uint32_t klen; uint32_t vlen;
         memcpy(&klen, p, 4);
-        if (klen == 0 || klen >= sizeof(s_key) || p + 4 + klen + 4 > end) {
+        if (klen == 0 || klen >= sizeof(s_key) || (size_t)(end - p) < (size_t)4 + klen + 4 + 4) {
             fprintf(stderr, "[load] bad klen=%u at %zu, stop\n", klen, (size_t)(p - addr));
-            break;
+            goto out;
         }
         memcpy(s_key, p + 4, klen);
 
         memcpy(&vlen, p + 4 + klen, 4);
         if (vlen >= sizeof(s_value) || p + 4 + klen + 4 + vlen > end) {
             fprintf(stderr, "[load] bad vlen=%u at %zu, stop\n", vlen, (size_t)(p - addr));
-            break;
+            goto out;
         }
         memcpy(s_value, p + 4 + klen + 4, vlen);
         
@@ -1302,7 +1350,7 @@ void kvs_full_read(char *cmd, char *key, char *value){
 
         uint32_t crc_single_real = crc32(0L, p, (uInt)(p + 4 + klen + 4 + vlen - p));
         
-        if(crc_single_exp != crc_single_real){ printf("single crc check not match\n"); bad++; break;}
+        if(crc_single_exp != crc_single_real){ printf("single crc check not match\n"); bad++; goto out;}
         
         kvs_txt_load(cname, s_key, s_value, klen, vlen);
         loaded++;
@@ -1319,18 +1367,29 @@ out:
     close(fd);
 }
 
+
+static int load_hmac_key(void){
+    int fd = open("config/hmac.key", O_RDONLY | __O_CLOEXEC| __O_NOFOLLOW);
+    if (fd < 0) { perror("hmac.key"); return -1; }
+    ssize_t n = read(fd, g_hmac_key, sizeof g_hmac_key);
+    close(fd);
+    return (n == (ssize_t)sizeof g_hmac_key) ? 0 : -1;
+}
+
+
 static int add_save_flag = 0;
 static pthread_t add_pid;
 static pthread_t full_pid;
 int main(int argc, char const *argv[]){
 
     load_config("config/server.conf", &server_cfg);
-    // uLong crc = crc32(0L, Z_NULL, 0);
 
-    // if(server_cfg.use_mempool == 0){
-    //     mallopt(M_MMAP_THRESHOLD, 128 * 1024);
-    //     mallopt(M_TRIM_THRESHOLD, 128 * 1024);
-    // }
+    if (sodium_init() < 0) { fprintf(stderr, "sodium_init failed\n"); return 1; }
+
+    if (load_hmac_key() != 0) {
+        fprintf(stderr, "[init] HMAC key missing/invalid -> refuse to start\n");
+        return 1;
+    }
 
     mallopt(M_MMAP_THRESHOLD, 128 * 1024);
     mallopt(M_TRIM_THRESHOLD, 128 * 1024);

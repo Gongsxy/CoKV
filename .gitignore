@@ -6,3 +6,6 @@ testcase/testcase_save_add
 testcase/Makefile
 *.o
 build/
+# ÃÜÔ¿
+config/hmac.key
+*.key

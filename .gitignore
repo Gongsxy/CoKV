@@ -8,4 +8,5 @@ testcase/Makefile
 build/
 # ÃÜÔ¿
 config/hmac.key
-*.key
+*.keyhiredis/
+redis/

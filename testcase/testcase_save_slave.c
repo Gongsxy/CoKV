@@ -82,9 +82,8 @@ void testcase(int connfd)
 
 	for (total_num = 0; total_num < 50000; total_num++) {
 
-		if (j == 10) {
-			j = 0;
-		}
+		j = total_num % 10;
+		
 		char msg[4096] = {0};
 		char tmp[4096] = {0};
 		char tcopy[4096] = {0};
@@ -206,9 +205,8 @@ void testcase(int connfd)
 
 	for (total_num = 50000; total_num < 100000; total_num++) {
 
-		if (j == 10) {
-			j = 0;
-		}
+		j = total_num % 10;
+
 		char msg[4096] = {0};
 		char tmp[4096] = {0};
 		char tcopy[4096] = {0};

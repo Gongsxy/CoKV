@@ -771,17 +771,17 @@ int main(int argc, char *argv[]) {
 	}else if(strcmp(argv[1], "3") == 0) {
 		testcase_del(connfd);
 	}
-	if(cfg.full_save_flag == 1){
-		char tmp[128] = {0};
-		printf("enter save\n");
-		fflush(stdout);
-		while(fgets(tmp, sizeof(tmp), stdin)){
-			if(strcmp(tmp, "save\n") == 0) {
-				send_msg(connfd, "*1\r\n$4\r\nSAVE\r\n", 14);
-                break;;
-            }
-		}
-	}
+	// if(cfg.full_save_flag == 1){
+	// 	char tmp[128] = {0};
+	// 	printf("enter save\n");
+	// 	fflush(stdout);
+	// 	while(fgets(tmp, sizeof(tmp), stdin)){
+	// 		if(strcmp(tmp, "save\n") == 0) {
+	// 			send_msg(connfd, "*1\r\n$4\r\nSAVE\r\n", 14);
+    //             break;;
+    //         }
+	// 	}
+	// }
 	fgetc(stdin);
 
 

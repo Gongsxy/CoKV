@@ -1,45 +1,33 @@
-#define LIST_INSERT(item,list)do{   \
-    item->prev = NULL;              \
-    item->next = list;              \
-    if((list) != NULL){             \
-        (list)->prev = item;        \
-    }                               \
-    (list) = item;                  \
-}while(0);
+#ifndef __MEMPOOL_H__
+#define __MEMPOOL_H__
 
-#define LIST_REMOVE(item,list)do{       \
-    if(item->prev != NULL){             \
-        item->prev->next = item->next;  \
-    }                                   \
-    if(item->next != NULL){             \
-        item->next->prev = item->prev;  \
-    }                                   \
-    if(item == list){                   \
-        list = item->next;              \
-    }                                   \
-    item->next = item->prev = NULL;     \
-}while(0);
+#include <stdio.h>
 
+struct mp_pool *mp_create(size_t size);
+void mp_reset(struct mp_pool *pool);
+void mp_large_free(struct mp_pool *pool, void *p);
+void *mp_alloc(struct mp_pool *pool, size_t size);
+void mp_destory(struct mp_pool *pool);
 
-// typedef struct mem_chunk {
+struct mp_block_s{
+    unsigned char *last;
+    unsigned char *end;
 
-//     void *memory;
+    struct mp_block_s *next;
+    size_t failed;
+};
 
-//     struct mem_chunk *next;
+struct mp_large_s{
+    struct mp_large_s *next;
+    void *alloc;
+};
 
-// }M_chunk;
+struct mp_pool{
+    size_t max;
+    struct mp_block_s *current;
+    struct mp_large_s *large;
+    
+    struct mp_block_s head[0];
+};
 
-// typedef struct mem_block {
-//     int id;
-//     struct mem_block *next;
-//     struct mem_block *prev;
-// }M_block;
-
-typedef struct mem_pool {
-    size_t size;       
-    size_t offset;
-    char *memory;
-}Mempool;
-
-#define PAGE_SIZE  2048
-#define BLOCK_NUM   6
+#endif

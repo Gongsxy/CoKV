@@ -165,29 +165,30 @@ void read_func(void *arg){
     }
     
     char *buf = calloc(1, 1024 * 1024 * 5);
-    if (!buf || !res) {
+    char *resp = calloc(1, 1024 * 1024);
+    if (!buf || !resp) {
         free(buf);
-        free(res);
+        free(resp);
         nty_close(cli_fd);
         return;
     }
 
     while(1){
         memset(buf, 0, 1024 * 1024 * 5);
-        memset(res, 0, 1024 * 1024 * 1);
+        memset(resp, 0, 1024 * 1024 * 1);
 
         int recv_len = nty_recv(cli_fd, buf, 1024 * 1024 * 5, 0);
         if (recv_len <= 0) {
             break;
         }
         int length = 0;
-        length = kvs_protocol(buf, recv_len, res);
-        if (length > 0) nty_send(cli_fd, res, length, 0);
+        length = kvs_protocol(buf, recv_len, resp);
+        if (length > 0) nty_send(cli_fd, resp, length, 0);
     }
 
     nty_close(cli_fd);
     free(buf);    
-    free(res);
+    free(resp);
 }
 
 
@@ -202,6 +203,9 @@ void accept_func(void *arg){
         return ;
     }
     
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+
     struct sockaddr_in addr;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_family = AF_INET;

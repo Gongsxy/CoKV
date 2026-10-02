@@ -3,11 +3,15 @@
 #include "load_conf.h"
 #include "uring_slot.h"
 #include "../src/rdma.h"
+#include "mempool.h"
 
 #include <signal.h>
 #include <fcntl.h>  
 #include <sys/mman.h> 
 #include <unistd.h>
+#include <sodium.h>
+#include <zlib.h>
+
 
 #if 1
 kvs_array_t *globle_array = NULL;
@@ -32,7 +36,8 @@ const char *command[] = {
     "RSET","RGET","RDEL","RMOD","REXIST",
     "HSET","HGET","HDEL","HMOD","HEXIST",
     "SSET","SGET","SDEL","SMOD","SEXIST",
-    "SYNC","PING","QUIT","INFO","SAVE"
+    "SYNC","PING","QUIT","INFO","SAVE",
+    "CLEAR"
 };
 
 const char *key_value_command[] = {
@@ -70,6 +75,7 @@ enum {
     KVS_CMD_QUIT,
     KVS_CMD_INFO,
     KVS_CMD_SAVE,
+    KVS_CMD_CLEAR,
     KVS_CMD_COUNT
 };
 
@@ -88,11 +94,17 @@ uring_info u_info[1024];
 uring_info u_full_info;
 
 
+static struct mp_pool *pool = NULL;
+static struct mp_pool *cmd_pool = NULL;
+
+static unsigned char g_hmac_key[crypto_auth_hmacsha256_KEYBYTES];
+
 static __g_rdma gr = {0};
 
 
 static int globle_add_fd = -1;
 static int globle_full_fd = -1;
+static int load_saved_msg = 1;
 
 const char *response[] = {
 
@@ -100,6 +112,8 @@ const char *response[] = {
 
 #define STATUS_IN	1
 #define STATUS_OUT	0
+
+#define MAC_LEN crypto_auth_hmacsha256_BYTES
 
 #define INIT STATUS_OUT;
 
@@ -187,8 +201,11 @@ int is_number(char *msg){//1 true 0 false
 }
 
 
-int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len, int *push_flag){
+static int skip_add_log = 0;
+int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len){
     if(tokens == NULL || response == NULL) return -1;
+
+    skip_add_log = 0;
 
     int i = KVS_CMD_START;
     for(i = KVS_CMD_START; i < KVS_CMD_COUNT; i ++){
@@ -196,11 +213,15 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             break;
         }
     }
+    if(strncmp(tokens[0], "H", 1) == 0){
+        memmove(tokens[0], tokens[0] + 1, strlen(tokens[0]));
+    }
     char *cmd = tokens[0];
     char *key = tokens[1];
     char *value = tokens[2];
     int length = 0;
     int ret = 0;
+    // const char* filename = "a.txt";
     switch(i){
 
 #if ENABLE_ARRAY
@@ -318,6 +339,11 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 // hash
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
+            if(*value_len > KVS_MAX_VALUE){
+                length = sprintf(response, "-ERR value too large\r\n");
+                break;
+            }
+
             int ret = kvs_hash_set(globle_hash,key,value, *key_len, *value_len);
             if(ret < 0){
                 if(server_cfg.show_response == 1 || *response != '0') length = sprintf(response,"-ERR %s\r\n", "unknown command");
@@ -330,8 +356,16 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             char *result = kvs_hash_get(globle_hash,key, *key_len, value_len);
             if(result == NULL){
                 if(server_cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
+            }else if(*value_len > KVS_MAX_VALUE){
+                length = sprintf(response, "-ERR value too large\r\n");
             }else{
-                if(server_cfg.show_response == 1) length = sprintf(response,"$%zu\r\n%s\r\n", strlen(result), result);
+                if(server_cfg.show_response == 1){
+                    length  = sprintf(response, "$%d\r\n", *value_len);
+                    memcpy(response + length, result, *value_len);
+                    length += *value_len;
+                    response[length++] = '\r';
+                    response[length++] = '\n';
+                }
             }
             break;
         }
@@ -431,97 +465,194 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
             break;
         }
-        case KVS_CMD_SAVE:{
-            int full_fd = get_full_fd();
-            if (full_fd < 0) {
-                length = sprintf(response, "-ERR open full file failed\r\n");
-                break;
-            }
+        case KVS_CMD_INFO:{
+            // int n = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
+            // length = sprintf(response, "+storage:%s count:%d hash:%p\r\n",
+            //                  server_cfg.storage_structure, n, (void *)globle_hash);
+            int n = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
+            int cap = 0, maxchain = 0, i;
+            unsigned long idx_bytes = 0;
 
-            char *tmp = calloc(1, 1024 * 1024 * 5);
-            if (!tmp) {
-                length = sprintf(response, "-ERR out of memory\r\n");
-                close(full_fd);
-                break;
-            }
-
-            int hash_length = kvs_hash_save(globle_hash, tmp);
-
-            if (hash_length <= 0) {
-                close(full_fd);
-                free(tmp);
-                length = sprintf(response, "+OK\r\n");
-                break;
-            }
-
-            struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
-            if (!sqe_full) {
-                close(full_fd);
-                free(tmp);
-                length = sprintf(response, "-ERR save busy\r\n");
-                break;
-            }
-
-            struct uring_info *full_info = calloc(1, sizeof(*full_info));
-            full_info->save_buf_ptr = tmp;
-            full_info->fd = full_fd;
-
-            io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length, 0);
-            io_uring_sqe_set_data(sqe_full, full_info);
-
-            int sub_ret = io_uring_submit(&full_ring);
-            if (sub_ret < 0) {
-                free(full_info->save_buf_ptr);
-                free(full_info);
-                close(full_fd);
-
-                length = sprintf(response, "-ERR submit failed\r\n");
-                break;
-            }
-
-            struct io_uring_cqe *cqe;
-            int wait_ret = io_uring_wait_cqe(&full_ring, &cqe);
-            if (wait_ret == 0) {
-                struct uring_info *info = io_uring_cqe_get_data(cqe);
-
-                if (cqe->res < 0) {
-                    length = sprintf(response, "-ERR save failed\r\n");
-                } else {
-                    fsync(full_fd);
-                    length = sprintf(response, "+OK\r\n");
+            if (globle_hash != NULL) {
+                cap = globle_hash->max_slots;
+                idx_bytes = (unsigned long)cap * sizeof(hashnode_t *);
+                for (i = 0; i < cap; i++) {
+                    int len = 0;
+                    hashnode_t *nd = globle_hash->nodes[i];
+                    while (nd) { len++; nd = nd->next; }
+                    if (len > maxchain) maxchain = len;
                 }
-
-                if (info) {
-                    free(info->save_buf_ptr);
-                    free(info);
-                }
-                io_uring_cqe_seen(&full_ring, cqe);
-                close(full_fd);
-            } else {
-                close(full_fd);
-                free(tmp);
-                free(full_info);
-                length = sprintf(response, "-ERR save failed\r\n");
             }
 
+            length = sprintf(response,
+                "+storage:%s count:%d max_slots:%d avg_chain:%.2f max_chain:%d index_bytes:%lu\r\n",
+                server_cfg.storage_structure, n, cap,
+                (cap > 0) ? (double)n / cap : 0.0, maxchain, idx_bytes);
             break;
-     
+            break;
         }
+        case KVS_CMD_SAVE:{
+            
+            skip_add_log = 1;
+
+            if(server_cfg.full_save == 1){
+                int full_fd = get_full_fd();
+                if (full_fd < 0) {
+                    length = sprintf(response, "-ERR open full file failed\r\n");
+                    break;
+                }
+                char *tmp = NULL;
+                if(server_cfg.use_mempool == 1){
+                    tmp = mp_alloc(pool, 1024 * 1024 * 10 + MAC_LEN);
+                    
+                }else{
+                    tmp = calloc(1, 1024 * 1024 * 10 + MAC_LEN);
+                }
+                if (!tmp) {
+                    length = sprintf(response, "-ERR out of memory\r\n");
+                    close(full_fd);
+                    break;
+                }
+
+                uint32_t count = (uint32_t)kvs_hash_count(globle_hash);
+
+                int hash_length = kvs_hash_save(globle_hash, tmp, 1024 * 1024 * 10, count);
+
+                if (hash_length <= 0) {
+                    close(full_fd);
+                    if(server_cfg.use_mempool == 1){
+                        mp_large_free(pool, tmp);
+                    }else free(tmp);
+                    length = sprintf(response, "+OK\r\n");
+                    break;
+                }
+
+                if (crypto_auth_hmacsha256((unsigned char *)(tmp + hash_length),
+                           (const unsigned char *)tmp, hash_length,
+                           g_hmac_key) != 0) {
+                    close(full_fd); 
+                    if(server_cfg.use_mempool == 1){
+                        mp_large_free(pool, tmp);
+                    }else free(tmp); 
+                    length = sprintf(response,"-ERR hmac failed\r\n"); 
+                    break;
+                }
+
+                struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
+                if (!sqe_full) {
+                    close(full_fd);
+                    if(server_cfg.use_mempool == 1){
+                        mp_large_free(pool, tmp);
+                    }else free(tmp);
+                    length = sprintf(response, "-ERR save busy\r\n");
+                    break;
+                }
+
+                struct uring_info *full_info = NULL;
+                if(server_cfg.use_mempool == 1){
+                    full_info = mp_alloc(pool, sizeof(*full_info));
+                    if(full_info) memset(full_info, 0, sizeof(*full_info));
+                }else{
+                    full_info = calloc(1, sizeof(*full_info));
+                }
+                full_info->save_buf_ptr = tmp;
+                full_info->fd = full_fd;
+
+                io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length + MAC_LEN, 0);
+                io_uring_sqe_set_data(sqe_full, full_info);
+
+                int sub_ret = io_uring_submit(&full_ring);
+                if (sub_ret < 0) {
+                    if(server_cfg.use_mempool == 1){
+                        mp_large_free(pool, full_info->save_buf_ptr);
+                        mp_large_free(pool, full_info);
+                    }else{
+                        if(server_cfg.use_mempool == 1){
+                            mp_large_free(pool, tmp);
+                            mp_large_free(pool, full_info);
+                        }else{
+                            free(tmp);
+                            free(full_info);
+                        }
+                    }
+                    close(full_fd);
+
+                    length = sprintf(response, "-ERR submit failed\r\n");
+                    break;
+                }
+
+                struct io_uring_cqe *cqe;
+                int wait_ret = io_uring_wait_cqe(&full_ring, &cqe);
+                if (wait_ret == 0) {
+                    struct uring_info *info = io_uring_cqe_get_data(cqe);
+
+                    if (cqe->res < 0) {
+                        length = sprintf(response, "-ERR save failed\r\n");
+                    } else {
+                        fsync(full_fd);
+                        length = sprintf(response, "+OK\r\n");
+                    }
+
+                    if (info) {
+                        // free(info->save_buf_ptr);
+                        if(server_cfg.use_mempool == 1){
+                           mp_large_free(pool, info->save_buf_ptr); 
+                           mp_large_free(pool, info);
+                        }else {
+                            free(info->save_buf_ptr);
+                            free(info);
+                        }
+                    }
+                    io_uring_cqe_seen(&full_ring, cqe);
+                    close(full_fd);
+                } else {
+                    close(full_fd);
+                    if (server_cfg.use_mempool == 1) {
+                        mp_large_free(pool, tmp);
+                    } else {
+                        free(tmp);
+                        free(full_info);
+                    }
+                    length = sprintf(response, "-ERR save failed\r\n");
+                }
+
+                break;
+            }
+        break;
+        }
+        case KVS_CMD_CLEAR:{
+            skip_add_log = 1;
+
+            const char *paths[2] = { "config/add.txt", "config/full.txt" };
+            int ok = 1;
+
+            for(int k = 0; k < 2; k++){
+                int cfd = open(paths[k], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if(cfd < 0){
+                    fprintf(stderr, "[clear] %s: %s\n", paths[k], strerror(errno));
+                    ok = 0;
+                }else{
+                    fsync(cfd);
+                    close(cfd);
+                }
+            }
+
+            length = ok ? sprintf(response, "+OK\r\n") : sprintf(response, "-ERR clear failed\r\n");
+            break;
+        }
+
         default:{
             if(server_cfg.show_response == 1) length = sprintf(response,"-ERR unknown command '%s'\r\n", tokens[0]);
             break;
         }
     }
 
-    
-    *push_flag = 0;
     return length;
 };
 
 
-static int sync_flag = 0;
-int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *push_flag){
-
+// ok
+int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *key_len, int *value_len, int *resp_total){
     if(msg == NULL || tokens == NULL) return -1;
     char *tcopy = msg;
     int idx = 0;
@@ -542,7 +673,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
         int move_flag = 1;
         switch(status){
-            case CMD:{
+            case CMD:{//OK
 
                 if(origin_status){   
 
@@ -550,7 +681,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
 
                         if(tcopy[i] != '*'){
                             break;
-                        }else{
+                        }else{//OK
 
                             i++;
                             while(tcopy[i] != '\r'){
@@ -559,6 +690,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                                 i++;
                             }
                             single_num = atoi(tmp);
+                            // printf("single_num:%d\n",single_num);
                             if(tcopy[i] == '\r'){
                                 i += 2;
                             }
@@ -584,7 +716,7 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     }
 
                 }
-
+                // $--> num
                 if(cmd_len_before){
 
                     if(tcopy[i] != '\r'){
@@ -592,47 +724,49 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                             return 0;
                         }
                         char ch_buf[2] = {tcopy[i], '\0'};
-                        strcat(tmp, ch_buf);
+                        strcat(tmp, ch_buf);// 3
                         break;
                     }else{
                         
                         int cmd_len = atoi(tmp);
+                        // printf("cmd_len:%d\n",cmd_len);
                         if (tcopy[i] == '\r' && tcopy[i + 1] == '\n') i++;
                         i++;
                         if(i + cmd_len > length){
 
                             return 0;
                         }
-
+                        // mempool
                         if(server_cfg.use_mempool == 1){
-                            tokens[0] = m_malloc(cmd_len + 2);
+                            tokens[0] = mp_alloc(cmd_pool, cmd_len + 2);
                         }else{
                             tokens[0] = malloc(cmd_len + 2);
                         }
                         char cmd_tmp[128] = {0};
                         memcpy(cmd_tmp, &tcopy[i], cmd_len);
-
-                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "SYNC") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0){
-                            sprintf(tokens[0], "%s", cmd_tmp);
-                        }else if(strcmp(cmd_tmp, "SET") == 0 || strcmp(cmd_tmp, "GET") == 0 || strcmp(cmd_tmp, "MOD") == 0 || strcmp(cmd_tmp, "EXIST") == 0 || strcmp(cmd_tmp, "DEL") == 0){
-                            if(strncmp(server_cfg.storage_structure, "array", 5) == 0){
-                                sprintf(tokens[0], "%s", cmd_tmp);
-                            }else if(strncmp(server_cfg.storage_structure, "rbtree", 6) == 0){
-                                sprintf(tokens[0], "R%s", cmd_tmp);
-                                i++;
-                            }else if(strncmp(server_cfg.storage_structure, "hash", 4) == 0){
-                                sprintf(tokens[0], "H%s", cmd_tmp);
-                            }else if(strncmp(server_cfg.storage_structure, "skiptable", 9) == 0){
-                                sprintf(tokens[0], "S%s", cmd_tmp);
+                        if (cmd_tmp) {
+                            for(int k = 0; cmd_tmp[k]; k++) {
+                                cmd_tmp[k] = toupper(cmd_tmp[k]);
                             }
                         }
-                        
+                        if(strcmp(cmd_tmp, "SAVE") == 0 || strcmp(cmd_tmp, "PING") == 0 || strcmp(cmd_tmp, "QUIT") == 0 || strcmp(cmd_tmp, "INFO") == 0 || strcmp(cmd_tmp, "CLEAR") == 0){
+                            sprintf(tokens[0], "%s", cmd_tmp);
+                        }else if(strncmp(server_cfg.storage_structure, "array", 5) == 0){
+                            sprintf(tokens[0], "%s", cmd_tmp);
+                        }else if(strncmp(server_cfg.storage_structure, "rbtree", 6) == 0){
+                            sprintf(tokens[0], "R%s", cmd_tmp);
+                            i++;
+                        }else if(strncmp(server_cfg.storage_structure, "hash", 4) == 0){
+                            sprintf(tokens[0], "H%s", cmd_tmp);
+                        }else if(strncmp(server_cfg.storage_structure, "skiplist", 8) == 0){
+                            sprintf(tokens[0], "S%s", cmd_tmp);
+                        }
 
                         i = i + cmd_len;
                         i += 2;
                         status = KEY;
                         finish_single++;
-
+                        // idx++;
                         memset(tmp, 0, 32);
 
                         origin_status = 1;
@@ -671,15 +805,14 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     }
                     // mempoll
                     if(server_cfg.use_mempool == 1){
-                        tokens[1] = m_malloc(*key_len + 1);
+                        tokens[1] = mp_alloc(cmd_pool, *key_len + 1);
                     }else{
                         tokens[1] = malloc(*key_len + 1);
                     }
                     memcpy(tokens[1], &tcopy[i], *key_len);
                     tokens[1][*key_len] = '\0';
-                    if(tokens[1] == "SYNC"){
-                        sync_flag = 1;
-                    }
+                    // printf("key:%s\n",tokens[1]);
+                    
                     memset(tmp, 0, 32);
                     i = i + *key_len;
                     
@@ -722,22 +855,26 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
                     i += 2;
                     *value_len = atoi(tmp);
                     if(i + *value_len > length){
+                        // stop = 3;
+                        // save_i=i;
                         return 0;
                     }
 
+                    // mempool
                     if(server_cfg.use_mempool == 1){
-                        tokens[2] = m_malloc(*value_len + 1);
+                        tokens[2] = mp_alloc(cmd_pool, *value_len + 1);
                     }else{
                         tokens[2] = malloc(*value_len + 1);
                     }
 
                     memcpy(tokens[2], &tcopy[i], *value_len );
                     tokens[2][*value_len] = '\0';
+                    // printf("value:%s\n",tokens[2]);
                     memset(tmp, 0, 32);
                     i = i + *value_len;
                     i += 2;
                     move_flag = 0;
-
+                    // idx++;
                     status = CMD;
                     finish_single++;
                     break;
@@ -750,11 +887,12 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
         
         if(single_num > 0 && finish_single == single_num){
             
-            int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len, push_flag);
+            int len = kvs_protocol_filter(tokens, response + resp_len, key_len, value_len);
             resp_len += len;
 
+            // mempool
             if(server_cfg.use_mempool == 1){
-                m_reset();
+                mp_reset(cmd_pool);
             }else{
                 if(tokens[0]) free(tokens[0]);
                 if(tokens[1]) free(tokens[1]);
@@ -779,25 +917,12 @@ int kvs_split_token(char *msg, char *tokens[], char *response, int length, int *
         }
 
     }
-
+    if(resp_total) *resp_total = resp_len;
     return i;
 }
 
-static int g_msg_has_crc = 0;
 
-static uint32_t get_be32(const unsigned char *p)
-{
-	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-	       ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
-}
-
-static uint32_t get_le32(const unsigned char *p)
-{
-	return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) |
-	       ((uint32_t)p[1] << 8)  |  (uint32_t)p[0];
-}
-
-#if 0
+// ok
 int kvs_is_complete(char *msg, int length){
 
     if (length < 4 || msg[0] != '*') return 0;
@@ -831,78 +956,10 @@ int kvs_is_complete(char *msg, int length){
     }
     return j;
 }
-#else 
-int kvs_is_complete(char *msg, int length)
-{
-	int off = 0;
-
-	if (length <= 0) return 0;
-
-	/* ---- 同步流：先跳过 4B CRC32 校验码 ---- */
-	if (g_msg_has_crc) {
-		if (length < 4 + 4)          /* CRC + 至少 "*0\r\n" */
-			return 0;            /* 还不够，等更多数据 */
-		off = 4;
-	}
-
-	if (length - off < 4 || msg[off] != '*') return 0;
-
-	int j = off + 1;
-	char tbuf[128] = {0};
-
-	/* 取 *<count>\r\n 里的 count */
-	while (j < length && msg[j] != '\r') {
-		if (j - off - 1 >= (int)sizeof(tbuf) - 1) return 0;   /* 防越界 */
-		tbuf[j - off - 1] = msg[j];
-		j++;
-	}
-	if (j + 1 >= length || msg[j] != '\r' || msg[j + 1] != '\n') return 0;
-
-	int count = atoi(tbuf);
-	if (count <= 0) return 0;
-	j += 2;
-
-	for (int k = 0; k < count; k++) {
-		if (j >= length || msg[j] != '$') return 0;
-		j++;
-
-		char lenbuf[128] = {0};
-		int li = 0;
-		while (j < length && msg[j] != '\r') {
-			if (li >= (int)sizeof(lenbuf) - 1) return 0;   /* 防越界 */
-			lenbuf[li++] = msg[j++];
-		}
-		if (j + 1 >= length || msg[j] != '\r' || msg[j + 1] != '\n') return 0;
-
-		int slen = atoi(lenbuf);
-		if (slen < 0) return 0;
-		j += 2;
-
-		if (j + slen + 2 > length) return 0;
-		j += slen + 2;
-	}
-
-	return j;   /* 返回已消费的总字节数：有 CRC 时天然包含了那 4B，调用方直接 j 往后走即可 */
-}
-#endif
 
 
-void sync_mes_init(void) {
-    if (sync_mes != NULL) return;  
-    
-    sync_mes_cap = 1024 * 1024 * 5;
-    if(server_cfg.use_mempool == 1){
-        sync_mes = m_malloc(sync_mes_cap);
-    }else {
-        sync_mes = calloc(1, sync_mes_cap);
-    }
-}
+int kvs_protocol(char *msg, int length, char *response){ 
 
-
-int kvs_protocol(char *msg, int length, char *response){
-    if (msg == NULL || response == NULL || length <= 0) {       
-        return -1;
-    }
     int key_len = 0;
     int value_len = 0;
     int push_flag = 0;
@@ -912,30 +969,14 @@ int kvs_protocol(char *msg, int length, char *response){
 
     if (mes == NULL) {
         if(server_cfg.use_mempool == 1){
-            mes = m_malloc(1024 * 1024 * 10);
-            if(mes) memset(mes, 0, 1024 * 1024 * 10);
+            mes = mp_alloc(pool, 1024 * 1024 * 5);
+            if(mes) memset(mes, 0, 1024 * 1024 * 5);
         }else {
-            mes = calloc(1, 1024 * 1024 * 10);
+            mes = calloc(1, 1024 * 1024 * 5);
         }
-
         mes_len = 0;
     }
-    
-    if(strncmp(msg, "+", 1) == 0) {
-
-        int i = 0, j = 0, in = 0;
-        while(msg[i]){
-            if(msg[i] == '*') {
-                msg[j] = msg[i];
-                in ++;
-                j++;
-            }
-            i++; 
-        }
-        msg[j] = '\0'; 
-        if(in == 0) return 0;
-    }
-
+   
     memcpy(mes + mes_len,msg,length);
 
     mes_len += length;
@@ -945,86 +986,84 @@ int kvs_protocol(char *msg, int length, char *response){
 
     int total_response_len = 0;
 
-
     while (mes_len > 0) {
 
         int packet_len = kvs_is_complete(mes, mes_len);
-        if (packet_len <= 0) {
-
-            g_msg_has_crc = (g_msg_has_crc == 1) ? 2 : 1;  
-            packet_len = kvs_is_complete(mes, mes_len);
-            if (packet_len <= 0) { g_msg_has_crc = 0; break; } 
-        }
         if (packet_len == 0) break; 
 
-        if (packet_len < 0 || packet_len > mes_len) {
-            fprintf(stderr, "[kvs_protocol] bad packet_len=%d, mes_len=%d, reset\n",
-                    packet_len, mes_len);
-            mes_len = 0;
-            memset(mes, 0, 1024 * 1024 * 7);
-            break;
-        }
-
-        char single_cmd[4096] = {0};
+        static char single_cmd[128 * 1024] = {0};
         memcpy(single_cmd, mes, packet_len);
-        single_cmd[packet_len] = '\0';
+
+        uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);
         
-        char single_response[BUFFER_LENGTH] = {0};
+
+        static char single_response[1024 * 1024 * 1] = {0};
+
+        single_cmd[packet_len] = '\0';
+        single_response[0] = '\0';
+
         char *tokens[3] = {NULL, NULL, NULL};
 
+        int resp_used = 0;
+        int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &resp_used);
 
-        int count = kvs_split_token(single_cmd, tokens, single_response, packet_len, &key_len, &value_len, &push_flag);
 
         if(server_cfg.add_save == 1) {
+            if(load_saved_msg == 1 && skip_add_log == 0){
+                int fd = get_add_fd();
+                struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
 
-            int fd = get_add_fd();
-            struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
+                if (!sqe) {
+                    fprintf(stderr, "add_ring sqe unavailable, skip add persistence\n");
+                } else {
+                    uring_info *slot = u_info_alloc();
+                    if (!slot) {
 
-            if (!sqe) {
-                fprintf(stderr, "add_ring sqe unavailable, skip add persistence\n");
-            } else {
-                uring_info *slot = u_info_alloc();
-                if (!slot) {
+                        do {
+                            io_uring_submit(&add_ring);
+                            struct io_uring_cqe *cqe;
+                            if (io_uring_wait_cqe(&add_ring, &cqe) == 0) {
+                                struct uring_info *done = io_uring_cqe_get_data(cqe);
+                                if (done) u_info_free(done);
+                                io_uring_cqe_seen(&add_ring, cqe);
+                            }
+                            slot = u_info_alloc();
+                        } while (!slot);
+                    }
 
-                    do {
+                    slot->fd = fd;
+                    slot->len = packet_len + 4;
+                    slot->buffer = malloc(packet_len + 4);
+                    if (!slot->buffer) {
+                        u_info_free(slot);
+                        fprintf(stderr, "[add] oom, skip log\n");
+                    } else {
+                        memcpy(slot->buffer, &crc_ret, 4);
+                        memcpy(slot->buffer + 4, single_cmd, packet_len);
+                        io_uring_prep_write(sqe, fd, slot->buffer, packet_len + 4, 0);
+                        io_uring_sqe_set_data(sqe, slot);
                         io_uring_submit(&add_ring);
-                        struct io_uring_cqe *cqe;
-                        if (io_uring_wait_cqe(&add_ring, &cqe) == 0) {
-                            struct uring_info *done = io_uring_cqe_get_data(cqe);
-                            if (done) u_info_free(done);
-                            io_uring_cqe_seen(&add_ring, cqe);
-                        }
-                        slot = u_info_alloc();
-                    } while (!slot);
+                    }
                 }
-
-                slot->fd = fd;
-                memcpy(slot->buffer, single_cmd, packet_len);
-                io_uring_prep_write(sqe, fd, slot->buffer, packet_len, 0);
-                io_uring_sqe_set_data(sqe, slot);
-                io_uring_submit(&add_ring);
             }
-
-        }
-        if(server_cfg.push_flag){
-            kvs_protocol_push(single_cmd, count);
         }
 
 
-        int single_len = strlen(single_response);
-        if (total_response_len + single_len < BUFFER_LENGTH) {
-            memcpy(response + total_response_len, single_response, single_len);
-            total_response_len += single_len;
+        if (total_response_len + resp_used < BUFFER_LENGTH) {
+            if(response != NULL){
+                memcpy(response + total_response_len, single_response, resp_used);
+            }
+            total_response_len += resp_used;
+        }else {
+            // fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
+            //         total_response_len, resp_used, BUFFER_LENGTH);
         }
 
 
         memmove(mes, mes + packet_len, mes_len - packet_len);
         mes_len -= packet_len;
     }
-    if(mes_len == 0) memset(mes, 0, 1024 * 1024 * 7);
-
     return total_response_len; 
-
 }
 
 
@@ -1070,7 +1109,6 @@ free(globle_skiplist);
 close(globle_add_fd);
 close(globle_full_fd);
 #endif
-m_reset();
 }
 
 
@@ -1157,7 +1195,7 @@ void kvs_add_read(char *cmd, char *key, char *value){
     char *p = addr;
     char *end = addr + len;
     
-    char *buf = m_malloc(len);
+    char *buf = malloc(len);
     memcpy(buf, p, len);
 
     char *tmp = calloc(1, 1024 * 1024 * 5);
@@ -1165,6 +1203,16 @@ void kvs_add_read(char *cmd, char *key, char *value){
     munmap(addr, len);
     close(fd);
 }
+
+
+static int load_hmac_key(void){
+    int fd = open("config/hmac.key", O_RDONLY | __O_CLOEXEC| __O_NOFOLLOW);
+    if (fd < 0) { perror("hmac.key"); return -1; }
+    ssize_t n = read(fd, g_hmac_key, sizeof g_hmac_key);
+    close(fd);
+    return (n == (ssize_t)sizeof g_hmac_key) ? 0 : -1;
+}
+
 
 // ok
 void kvs_full_read(char *cmd, char *key, char *value){
@@ -1266,6 +1314,13 @@ int main(int argc, char const *argv[]){
     char key[TXT_LENGTH] = {0};
     char value[TXT_LENGTH] = {0};
 
+    if (sodium_init() < 0) { fprintf(stderr, "sodium_init failed\n"); return 1; }
+
+    if (load_hmac_key() != 0) {
+        fprintf(stderr, "[init] HMAC key missing/invalid -> refuse to start\n");
+        return 1;
+    }
+
     if(server_cfg.mode == 1){
         if(server_cfg.add_save == 1) kvs_add_read(cmd, key, value);
         if(server_cfg.full_save == 1) {
@@ -1281,6 +1336,7 @@ int main(int argc, char const *argv[]){
     }
     dest_kvs();
     kvs_push_destroy();
-    mpool_destroy();
+    mp_destory(pool);
+    mp_destory(cmd_pool);
     return 0;
 }

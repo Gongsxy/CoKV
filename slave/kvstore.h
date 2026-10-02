@@ -191,6 +191,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len);
 int kvs_hash_exist(kvs_hash_t *hash, char *key, int key_len);
 int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len);
 
+
 #endif
 
 int reactor_b_start(const char *ip, unsigned short port, msg_handle hand);
@@ -261,20 +262,10 @@ int kvs_add_save(char *msg);
 #endif
 
 
-#define ENABLE_MEMPOOL 1
-#if ENABLE_MEMPOOL
-
-void *m_malloc(int size);
-void m_free(void *ptr);
-void mpool_destroy(void);
-void m_reset();
-
-#endif
-
 int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
 static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char *msg);
 int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
-int kvs_hash_save(kvs_hash_t *hash, char *msg);
+int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length, uint32_t count);
 
 
 

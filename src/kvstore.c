@@ -128,26 +128,6 @@ static char *sync_mes = NULL;
 static int   sync_mes_cap = 0;
 static int   sync_mes_len = 0;
 
-void *uring_add_cqe_thread(void *argv){
-    while(1){
-        struct io_uring_cqe *cqe;
-        int u_ret = io_uring_wait_cqe(&add_ring, &cqe);
-        if(u_ret == 0){
-            struct uring_info *info = io_uring_cqe_get_data(cqe);
-            if(info){
-                if(info->buffer){ free(info->buffer); info->buffer = NULL; }
-                info->len = 0;
-                u_info_free(info); 
-            }
-
-            io_uring_cqe_seen(&add_ring, cqe);
-            
-        }
-        if (u_ret < 0) { fprintf(stderr, "[uring] %s\n", strerror(-u_ret)); continue; }
-    }
-}
-
-
 
 int get_add_fd(void){
     if(globle_add_fd < 0){
@@ -888,39 +868,50 @@ int kvs_protocol(char *msg, int length, char *response){
 
         if(server_cfg.add_save == 1) {
             if(load_saved_msg == 1 && skip_add_log == 0){
-                int fd = get_add_fd();
-                struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
 
-                if (!sqe) {
-                    fprintf(stderr, "add_ring sqe unavailable, skip add persistence\n");
-                } else {
-                    uring_info *slot = u_info_alloc();
-                    if (!slot) {
+            int fd = get_add_fd();
 
-                        do {
-                            io_uring_submit(&add_ring);
-                            struct io_uring_cqe *cqe;
-                            if (io_uring_wait_cqe(&add_ring, &cqe) == 0) {
-                                struct uring_info *done = io_uring_cqe_get_data(cqe);
-                                if (done) u_info_free(done);
-                                io_uring_cqe_seen(&add_ring, cqe);
-                            }
-                            slot = u_info_alloc();
-                        } while (!slot);
+            uring_info *slot = u_info_alloc();                
+            if (!slot) {
+                io_uring_submit(&add_ring);                    
+                struct io_uring_cqe *cqe;
+                while (io_uring_peek_cqe(&add_ring, &cqe) == 0) {   
+                    struct uring_info *done = io_uring_cqe_get_data(cqe);
+                    if (done) {
+                        if (done->len > 0 && cqe->res != done->len)     
+                            fprintf(stderr, "[aof] write incomplete: res=%d expect=%d\n",
+                                    cqe->res, done->len);
+                        if (done->buffer) { free(done->buffer); done->buffer = NULL; }
+                        u_info_free(done);
                     }
+                    io_uring_cqe_seen(&add_ring, cqe);
+                }
+                slot = u_info_alloc();
+            }
 
-                    slot->fd = fd;
+            if (!slot) {
+                fprintf(stderr, "[aof] pool empty, drop this record\n");   
+            } else {
+                struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);    
+                if (!sqe) {
+                    u_info_free(slot);
+                    fprintf(stderr, "[aof] no sqe, drop this record\n");
+                } else {
+                    slot->fd  = fd;
                     slot->len = packet_len + 4;
                     slot->buffer = malloc(packet_len + 4);
                     if (!slot->buffer) {
                         u_info_free(slot);
-                        fprintf(stderr, "[add] oom, skip log\n");
                     } else {
                         memcpy(slot->buffer, &crc_ret, 4);
                         memcpy(slot->buffer + 4, single_cmd, packet_len);
                         io_uring_prep_write(sqe, fd, slot->buffer, packet_len + 4, 0);
                         io_uring_sqe_set_data(sqe, slot);
-                        io_uring_submit(&add_ring);
+                        if (io_uring_submit(&add_ring) < 0) {              
+                            fprintf(stderr, "[aof] submit failed, drop\n");
+                            free(slot->buffer); slot->buffer = NULL;
+                            u_info_free(slot);
+                        }
                     }
                 }
             }
@@ -946,8 +937,8 @@ int kvs_protocol(char *msg, int length, char *response){
 
         free(tokens[0]); free(tokens[1]); free(tokens[2]); 
         free(single_cmd); free(single_response);
+        }
     }
-    
 
     return total_response_len; 
 }
@@ -1075,12 +1066,12 @@ void kvs_add_read(char *cmd, char *key, char *value){
     }
 
     
-    char *tmp = NULL;
-    if(server_cfg.use_mempool == 1){
-        tmp = mp_alloc(pool, 1024 * 1024 * 5);
-    }else{
-        tmp = calloc(1, 1024 * 1024 * 5);
-    }
+    // char *tmp = NULL;
+    // if(server_cfg.use_mempool == 1){
+    //     tmp = mp_alloc(pool, 1024 * 1024 * 5);
+    // }else{
+    //     tmp = calloc(1, 1024 * 1024 * 5);
+    // }
 
     load_saved_msg = 0;
 
@@ -1118,8 +1109,8 @@ void kvs_add_read(char *cmd, char *key, char *value){
     load_saved_msg = 1;
     munmap(addr, len);
     close(fd);
-    if(server_cfg.use_mempool == 1) mp_large_free(pool, tmp);
-    else free(tmp);
+    // if(server_cfg.use_mempool == 1) mp_large_free(pool, tmp);
+    // else free(tmp);
 }
 
 
@@ -1318,9 +1309,7 @@ int main(int argc, char const *argv[]){
     if(server_cfg.full_save == 1) {
         kvs_full_read(cmd, key, value);
     }
-    if (g_add_ring_ok){
-        pthread_create(&add_pid, NULL, uring_add_cqe_thread, NULL);
-    }
+
     rdma_init(&gr);
     if(resp_capture() < 0) return -1;
     // if(server_cfg.use_mempool == 0){

@@ -1,6 +1,9 @@
 
 #include "uring_slot.h"
+
+
 #include <stdio.h>
+#include <stdlib.h>
 
 #define MAX_URING_INFO 1024
 
@@ -14,6 +17,9 @@ void u_info_pool_init(void) {
         u_info[i].idx = i;
         u_info[i].used = 0;
         u_info[i].save_buf_ptr = NULL;
+        u_info[i].buffer = NULL;
+        u_info[i].fd = -1;
+        u_info[i].len = 0;
         u_info[i].free_next = (i + 1 < MAX_URING_INFO) ? i + 1 : -1;
     }
     u_info_free_head = 0;
@@ -48,12 +54,17 @@ void u_info_free(uring_info *info) {
         return;
     }
     pthread_mutex_lock(&u_info_lock);
-    if (info->used == 0) {                                        /* 双重 free 会让空闲链成环 */
+    if (info->used == 0) {                                        
         pthread_mutex_unlock(&u_info_lock);
         fprintf(stderr, "[slot] BUG: double free idx=%d\n", info->idx);
         return;
     }
     
+    free(info->buffer);
+    info->buffer = NULL;
+    info->len = 0;
+
+
     info->used = 0;
     info->save_buf_ptr = NULL;
     info->free_next = u_info_free_head;

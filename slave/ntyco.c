@@ -1,3 +1,4 @@
+
 #include "../NtyCo/core/nty_coroutine.h"
 #include <netinet/in.h>
 
@@ -23,7 +24,6 @@ __g_slave g_s_slave = {0};
 uint32_t transfer_len = 0;
 
 char *res = NULL;
-
 void rdma_handshake(void *arg)
 {
     int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
@@ -129,8 +129,7 @@ void rdma_handshake(void *arg)
     }
     uint32_t ack = htonl(1);
     nty_send(fd, &ack, sizeof(ack), 0);
-    // close(fd);
-    // nty_close(fd);
+
     char *cbuf = calloc(1, 1024 * 1024 * 5);
     char *cres = calloc(1, 1024 * 1024);
     if (!cbuf || !cres) {
@@ -146,7 +145,7 @@ void rdma_handshake(void *arg)
 
         int n = nty_recv(fd, cbuf, 1024 * 1024 * 5, 0);  
         if (n <= 0) {
-            printf("[slave] master gone, n=%d\n", n);
+            // printf("[slave] master gone, n=%d\n", n);
             break;
         }
 
@@ -159,27 +158,57 @@ void rdma_handshake(void *arg)
     return ;
 }
 
-static int kvs_send_all(int fd, char *buf, size_t len){
-    if(fd < 0 || buf == NULL || len == 0) return -1;
 
-    int retry = 0;
-    size_t off = 0;
-    while(off < len){
-        ssize_t n = nty_send(fd, buf + off, len - off, 0);
+typedef struct {
+    int    fd;
+    char  *buf;        /* 队列 */
+    size_t len;        /* 有效字节数 */
+    size_t off;        /* 已发出偏移 */
+    int    sending;    /* 是否已有发送协程在跑（保证同一时刻只有一个写者） */
+    int    closed;     /* 读端已结束 */
+} send_resp_t;
 
-        if(n > 0){
-            off += (size_t)n;
-            continue;
-        }
 
-        if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            if (++retry > 100000) return -1;
-            continue; 
-        }
-        return -1;
-    }
+
+static int send_resp_append(send_resp_t *s, char *msg, int length){
+
+    if(s == NULL || msg == NULL || length == 0) return -1;
+
+    void *p = realloc(s->buf, s->len + length);
+    if(p == NULL) return -2;
+    s->buf = p;
+
+    memcpy(s->buf + s->len, msg, length);
+    s->len += length;
+
     return 0;
 }
+
+
+void send_func(void *arg){
+
+    send_resp_t *sr = arg;
+
+    while(sr->off < sr->len){
+        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, sr->len - sr->off, 0);
+        if(n > 0) {sr->off += (size_t)n; continue;}
+        if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            continue;
+        }
+        break;
+    }
+
+    if(sr->off >= sr->len) {sr->off = 0; sr->len = 0;}
+    sr->sending = 0;
+
+    if (sr->closed && sr->len == 0) {
+        nty_close(sr->fd);
+        free(sr->buf);
+        free(sr);
+    }
+    // nty_send(send_resp[cli_fd]->fd, send_resp[cli_fd]->buf, send_resp[cli_fd]->len, 0);
+}
+
 
 void read_func(void *arg){
 
@@ -199,6 +228,10 @@ void read_func(void *arg){
         nty_close(cli_fd);
         return;
     }
+    
+    send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
+    if(!sr) { free(buf); free(resp); nty_close(cli_fd); return; }
+    sr->fd = cli_fd;
 
     while(1){
 
@@ -206,6 +239,7 @@ void read_func(void *arg){
 
         if (recv_len == 0) break;
         if (recv_len < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
             fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
                     cli_fd, recv_len, errno, strerror(errno));
             break;
@@ -216,7 +250,16 @@ void read_func(void *arg){
         length = kvs_protocol_slave(buf, recv_len, resp);
 
         if (length > 0) {
-            nty_send(cli_fd, resp, length, 0);
+
+            nty_coroutine *send_co;
+
+            send_resp_append(sr, resp, length);
+            
+            if(!sr->sending){
+                sr->sending = 1;
+                nty_coroutine *send_co;
+                nty_coroutine_create(&send_co, send_func, sr);
+            }
         }
 
         static uint64_t last_trim_ms = 0;
@@ -228,8 +271,13 @@ void read_func(void *arg){
             malloc_trim(0);
         }
     }
+    sr->closed = 1;
+    if (!sr->sending) { 
+        nty_close(sr->fd);
+        free(sr->buf);
+        free(sr);
+    }
 
-    nty_close(cli_fd);
     malloc_trim(0);
     free(buf);    
     free(resp);
@@ -277,8 +325,8 @@ void accept_func(void *arg){
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue; 
             if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS) continue; 
             if (errno == EBADF || errno == EINVAL) break;
-                perror("nty_accept");
-                continue;
+            perror("nty_accept");
+            continue;
         }
 
         int *arg = calloc(1, sizeof(int));

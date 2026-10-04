@@ -742,7 +742,8 @@ int kvs_is_complete(char *msg, int length){
 static int mes_len = 0;
 static int mes_size = 1024 * 1024 * 5;
 
-int kvs_protocol(char *msg, int length, char *response){ 
+int kvs_protocol(char *msg, int length, char *response){
+
     int key_len = 0;
     int value_len = 0;
     int packet_len = 0;
@@ -930,7 +931,7 @@ int kvs_protocol(char *msg, int length, char *response){
     return total_response_len; 
 }
 
-#if 0
+#if 1
 static char *mes_slave;
 static int mes_slave_len;
 static int mes_slave_size = 1024 * 1024 * 5;
@@ -1444,7 +1445,7 @@ static void mtrace_exit(int s){ (void)s; muntrace(); _exit(0); }
 static int g_add_ring_ok  = 0;
 int main(int argc, char const *argv[]){
 
-    mtrace();
+    // mtrace();
     load_config("config/server_slave.conf", &server_slave_cfg);
 
     if (sodium_init() < 0) { fprintf(stderr, "sodium_init failed\n"); return 1; }
@@ -1497,7 +1498,7 @@ int main(int argc, char const *argv[]){
     mp_destory(pool);
     mp_destory(cmd_pool);
 
-    muntrace(); 
+    // muntrace(); 
     return 0;
 
 }

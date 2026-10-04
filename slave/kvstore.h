@@ -267,7 +267,7 @@ static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char
 int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
 int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length, uint32_t count);
 
-int get_mes();
+int kvs_protocol_slave(char *msg, int length, char *response);
 
 #endif
 #endif

@@ -55,7 +55,7 @@ testcase_characters:
 
 
 server_slave:
-	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl
+	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl -lsodium -lz
 
 # $(SOURCES_TEST)
 test:

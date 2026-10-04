@@ -153,22 +153,6 @@ int get_full_fd(void){
 }
 
 
-int is_number(char *msg){//1 true 0 false 
-	if(msg == NULL) return 0;
-	int i = 0;
-	int not_digit = 0;
-	for(i = 0; msg[i] != '\0'; i++){
-		if(!isdigit(msg[i])){
-			return 0;
-		}else{
-			not_digit = 1;
-			break;
-		}
-	}
-	if(not_digit) return 0;
-	return 1;
-}
-
 static int skip_add_log = 0;
 int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len){
     if(tokens == NULL || response == NULL) return -1;
@@ -814,7 +798,7 @@ int kvs_protocol(char *msg, int length, char *response){
     while (mes_len > 0) {
 
         key_len = 0; value_len = 0;
-        int packet_len = kvs_is_complete(mes, mes_len);
+        packet_len = kvs_is_complete(mes, mes_len);
         if (packet_len == 0) break; 
 
         char *single_cmd = NULL;
@@ -913,6 +897,8 @@ int kvs_protocol(char *msg, int length, char *response){
                             u_info_free(slot);
                         }
                     }
+                
+                    }
                 }
             }
         }
@@ -937,7 +923,7 @@ int kvs_protocol(char *msg, int length, char *response){
 
         free(tokens[0]); free(tokens[1]); free(tokens[2]); 
         free(single_cmd); free(single_response);
-        }
+        
     }
 
     return total_response_len; 

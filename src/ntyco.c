@@ -296,7 +296,6 @@ void rdma_handshake(void *arg){
     return ;
 }
 
-
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
     if(cfg.use_mempool == 0){
@@ -333,6 +332,8 @@ void read_func(void *arg){
     while(1){
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
         if (recv_len <= 0) {
+            fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
+                    cli_fd, recv_len, errno, strerror(errno));
             break;
         }
 
@@ -345,7 +346,7 @@ void read_func(void *arg){
         static unsigned long long n = 0;
         if (info != NULL && info->len > 0) {
             int need = (int)info->len;
-            if ((size_t)need > cap_alloc) {            /* ²»¹»¾ÍÏÈÀ© */
+            if ((size_t)need > cap_alloc) { 
                 char *p;
 			    size_t new_alloc = (size_t)need * 2;
                 if(cfg.use_mempool == 1){

@@ -335,50 +335,6 @@ void rbtree_traversal(rbtree *T, rbtree_node *node) {
 	}
 }
 
-#if 0
-int main() {
-
-	int keyArray[20] = {24,25,13,35,23, 26,67,47,38,98, 20,19,17,49,12, 21,9,18,14,15};
-
-	rbtree *T = (rbtree *)malloc(sizeof(rbtree));
-	if (T == NULL) {
-		printf("malloc failed\n");
-		return -1;
-	}
-	
-	T->nil = (rbtree_node*)malloc(sizeof(rbtree_node));
-	T->nil->color = BLACK;
-	T->root = T->nil;
-
-	rbtree_node *node = T->nil;
-	int i = 0;
-	for (i = 0;i < 20;i ++) {
-		node = (rbtree_node*)malloc(sizeof(rbtree_node));
-		node->key = keyArray[i];
-		node->value = NULL;
-
-		rbtree_insert(T, node);
-		
-	}
-
-	rbtree_traversal(T, T->root);
-	printf("----------------------------------------\n");
-
-	for (i = 0;i < 20;i ++) {
-
-		rbtree_node *node = rbtree_search(T, keyArray[i]);
-		rbtree_node *cur = rbtree_delete(T, node);
-		free(cur);
-
-		rbtree_traversal(T, T->root);
-		printf("----------------------------------------\n");
-	}
-	
-
-	
-}
-#endif
-
 
 // kvs_rbtree_t *globle_rbtree;
 
@@ -386,7 +342,7 @@ int kvs_rbtree_create(kvs_rbtree_t *inst){
 
 	if(!inst) return -1;
 
-	inst->nil = (rbtree_node *)kvs_malloc(sizeof(rbtree_node));
+	inst->nil = (rbtree_node *)malloc(sizeof(rbtree_node));
 	inst->nil->color = BLACK;
 	inst->root = inst->nil;
 
@@ -402,7 +358,7 @@ void kvs_rbtree_destory(kvs_rbtree_t *inst){
 
 		rbtree_node *mini = rbtree_mini(inst, node);
 		rbtree_node *cur = rbtree_delete(inst, mini);
-		kvs_free(cur);
+		free(cur);
 	}
 
 	free(inst->nil);
@@ -412,20 +368,20 @@ int kvs_rbtree_set(kvs_rbtree_t *inst, char *key, char *value){
 
 	if(inst == NULL || key == NULL || value == NULL) return -1;
 	
-	rbtree_node *node = (rbtree_node*)kvs_malloc(sizeof(rbtree_node));
+	rbtree_node *node = (rbtree_node*)malloc(sizeof(rbtree_node));
 
 	rbtree_node *exist = rbtree_search(inst, key);
     if(exist != inst->nil) {
         return 1;  // ¡û EXIST
     }
 
-	node->key = kvs_malloc(strlen(key) + 1);
+	node->key = malloc(strlen(key) + 1);
 	if(!node->key) return -2;
 
 	memset(node->key, 0, strlen(key) + 1);
 	strcpy(node->key, key);
 
-	node->value = kvs_malloc(strlen(value) + 1);
+	node->value = malloc(strlen(value) + 1);
 	if(!node->value) return -2;
 
 	memset(node->value, 0, strlen(value) + 1);
@@ -468,9 +424,9 @@ int kvs_rbtree_mod(kvs_rbtree_t *inst, char *key, char *value){
 	if(!node) return 1;
 	if(node == inst->nil) return 1;
 
-	kvs_free(node->value);
+	free(node->value);
 
-	node->value = kvs_malloc(strlen(value) + 1);
+	node->value = malloc(strlen(value) + 1);
 	if(!node->value) return -2;
 	memset(node->value , 0 , strlen(value) + 1);
 	strcpy(node->value, value);

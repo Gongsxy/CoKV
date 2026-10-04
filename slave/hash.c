@@ -30,7 +30,7 @@ void cfg_init(void) {
     if (done) return;
     done = 1;
 
-	load_config("config/server.conf", &cfg);
+	load_config("config/server_slave.conf", &cfg);
     pool = mp_create(4096);
 }
 

@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <bpf/libbpf.h>
-// #include <bpf/bpf.h>
+#include <bpf/bpf.h>
 #include <pthread.h>
 
 #include ".output/resp_capture.skel.h"
@@ -93,7 +93,11 @@ void resp_capture_reset(void)
     __u32 zero = 0;
 
     if (g_map_fd < 0) return;
-    bpf_map__update_elem(skel->maps.resp_cap, &zero, sizeof(zero), &empty, sizeof(empty), BPF_ANY);
+    int ret = bpf_map_update_elem(g_map_fd, &zero, &empty, BPF_ANY);
+
+    if (ret < 0) {
+        perror("bpf_map_update_elem");
+    }
 }
 
 struct bpf_get_resp_info *resp_capture_read(void){
@@ -103,7 +107,12 @@ struct bpf_get_resp_info *resp_capture_read(void){
 	
 	if (g_map_fd < 0) return NULL;
 
-	bpf_map__lookup_elem(skel->maps.resp_cap, &zero, sizeof(zero), &tmp, sizeof(tmp), 0);
+	int ret = bpf_map_lookup_elem(g_map_fd, &zero, &tmp);
+    if (ret < 0) {
+        perror("bpf_map_lookup_elem");
+        return NULL;
+    }
+
 	if(tmp.len == 0) return NULL;
 
     return &tmp;

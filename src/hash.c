@@ -138,7 +138,7 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 
 
 // mp
-int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len) {
+int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len) {
 
 	if (!hash || !key || key_len < 0 || !value || value_len < 0) return -1;
 
@@ -165,7 +165,7 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
 }
 
 
-char * kvs_hash_get(kvs_hash_t *hash, char *key, int key_len, int *value_len) {
+char * kvs_hash_get(kvs_hash_t *hash, char *key, size_t key_len, size_t *value_len) {
 
 	if (!hash || !key || key_len < 0) return NULL;
 
@@ -190,7 +190,7 @@ int kvs_hash_count(kvs_hash_t *hash) {
     return hash ? hash->count : 0;
 }
 
-int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len) {
+int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len) {
 	if (!hash || !key || key_len < 0) return -2;
 
 	int idx = _hash(key, key_len, hash->max_slots);
@@ -229,7 +229,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len) {
 	return 0;
 }
 
-int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len){
+int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len){
     if (!hash || !key || key_len < 0 || !value || value_len < 0) return -2;
 
     int idx = _hash(key, key_len, hash->max_slots);
@@ -259,7 +259,7 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
     return 0;
 }
 
-int kvs_hash_exist(kvs_hash_t *hash, char *key, int key_len) {
+int kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len) {
 	return kvs_hash_get(hash, key, key_len, NULL) ? 0 : 1;
 }
 

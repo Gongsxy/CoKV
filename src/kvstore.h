@@ -68,12 +68,7 @@ int check_fd_to_ip(int fd, char *ip);
 
 // connection son;
 
-int kvs_protocol(char *msg, int length, char *response);
-int kvs_protocol_push(char *msg, int length);
-int kvs_push_get(char *msg);
-void kvs_push_clear();
-void kvs_push_destroy();
-int kvs_push_init();
+int kvs_protocol(char *msg, int length, char **response);
 
 #if ENABLE_RBTREE
 typedef char * KEY_TYPE;
@@ -110,7 +105,7 @@ int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
 
 #if  ENABLE_ARRAY
 typedef int(*msg_handle)(char *msg, int length, char *response);
-int kvs_protocol(char *msg, int length, char *response);
+
 
 typedef struct kvs_array_items_s{
     char *key;
@@ -184,12 +179,12 @@ extern kvs_hash_t *globle_hash;
 
 int kvs_hash_create(kvs_hash_t *hash);
 void kvs_hash_destory(kvs_hash_t *hash);
-int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len);
-char * kvs_hash_get(kvs_hash_t *hash, char *key, int key_len, int *value_len);
+int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len);
+char * kvs_hash_get(kvs_hash_t *hash, char *key, size_t key_len, size_t *value_len);
 int kvs_hash_count(kvs_hash_t *hash);
-int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len);
-int kvs_hash_exist(kvs_hash_t *hash, char *key, int key_len);
-int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len);
+int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len);
+int kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len);
+int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len);
 
 #endif
 
@@ -252,7 +247,7 @@ int kvs_txt_mod(char *cmd, char* key, char* value, int *key_len, int *value_len)
 char * kvs_txt_get(char *cmd, char* key, int *key_len);
 
 void kvs_txt_read(char *cmd, char *key, char *value);
-void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len);
+void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len);
 void kvs_txt_full_load(char *msg);
 int kvs_add_save(char *msg);
 

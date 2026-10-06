@@ -26,8 +26,6 @@ static void *s_storage;
 __g_rdma g_rdma = {0};
 __g_slave g_slave = {.fd = -1};
 
-extern int kvs_protocol(char *msg, int length, char *response);
-
 #if 1
 int load_save_mes(){
     if(cfg.add_save == 1){
@@ -310,15 +308,15 @@ void read_func(void *arg){
 
     size_t cap_alloc = 1024 * 1024;
 
-    if(cfg.use_mempool == 1){
-        buf = mp_alloc(pool, 64 * 1024);
-        response = mp_alloc(pool, 1024 * 1024 * 1);
-        capbuf = mp_alloc(pool, 1024 * 1024 * 1);
-    }else {
+    // if(cfg.use_mempool == 1){
+    //     buf = mp_alloc(pool, 64 * 1024);
+    //     response = mp_alloc(pool, 1024 * 1024 * 1);
+    //     capbuf = mp_alloc(pool, 1024 * 1024 * 1);
+    // }else {
         buf = calloc(1, 64 * 1024);
         response = calloc(1, 1024 * 1024 * 1);
         capbuf = calloc(1, 1024 * 1024 * 1);
-    }
+    // }
     if (!buf || !response || !capbuf) {
         if(cfg.use_mempool == 0){
             free(buf);
@@ -339,7 +337,7 @@ void read_func(void *arg){
 
         resp_capture_reset();
 
-        int length = kvs_protocol(buf, recv_len, response);
+        int length = kvs_protocol(buf, recv_len, &response);
         int cap_len = 0;
         struct bpf_get_resp_info *info = resp_capture_read();
 

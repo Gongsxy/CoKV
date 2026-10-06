@@ -154,7 +154,7 @@ int get_full_fd(void){
 
 
 static int skip_add_log = 0;
-int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_len){
+int kvs_protocol_filter(char **tokens, char *response, size_t *key_len, size_t *value_len){
     if(tokens == NULL || response == NULL) return -1;
     skip_add_log = 0;
 
@@ -291,10 +291,10 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 // hash
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
-            if(*value_len > KVS_MAX_VALUE){
-                length = sprintf(response, "-ERR value too large\r\n");
-                break;
-            }
+            // if(*value_len > KVS_MAX_VALUE){
+            //     length = sprintf(response, "-ERR value too large\r\n");
+            //     break;
+            // }
 
             int ret = kvs_hash_set(globle_hash,key,value, *key_len, *value_len);
             if(ret < 0){
@@ -308,11 +308,9 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
             char *result = kvs_hash_get(globle_hash,key, *key_len, value_len);
             if(result == NULL){
                 if(server_cfg.show_response == 1) length = sprintf(response,"$-1\r\n");
-            }else if(*value_len > KVS_MAX_VALUE){
-                length = sprintf(response, "-ERR value too large\r\n");
             }else{
                 if(server_cfg.show_response == 1){
-                    length  = sprintf(response, "$%d\r\n", *value_len);
+                    length  = sprintf(response, "$%ld\r\n", *value_len);
                     memcpy(response + length, result, *value_len);
                     length += *value_len;
                     response[length++] = '\r';
@@ -615,7 +613,7 @@ int kvs_protocol_filter(char **tokens, char *response, int *key_len, int *value_
 
 
 // ok
-int kvs_split_token(char *msg, char *tokens[], int length, int *key_len, int *value_len, int *resp_total){
+int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size_t *value_len, int *resp_total){
     if(msg == NULL || length == 0 || key_len == 0) return -1;
 
     char *p = msg;
@@ -642,8 +640,12 @@ int kvs_split_token(char *msg, char *tokens[], int length, int *key_len, int *va
         // if(server_cfg.use_mempool == 1){
         //     tokens[0] = mp_alloc(cmd_pool, cmd_len + 1);
         // }else 
+    printf("BEFORE malloc: tokens[0]=%p cmd_len=%d\n",
+       (void *)tokens[0], cmd_len);
     tokens[0] = malloc(cmd_len + 1);
     if(tokens[0] == NULL) return -1;
+    printf("AFTER malloc: tokens[0]=%p\n",
+       (void *)tokens[0]);
 
     memcpy(tokens[0], p, cmd_len);
     tokens[0][cmd_len] = '\0';
@@ -704,7 +706,7 @@ int kvs_split_token(char *msg, char *tokens[], int length, int *key_len, int *va
 }
 
 
-// ok
+#if 0
 int kvs_is_complete(char *msg, int length){
 
     if (length < 4 || msg[0] != '*') return 0;
@@ -738,97 +740,181 @@ int kvs_is_complete(char *msg, int length){
     }
     return j;
 }
+#else 
 
-static int mes_len = 0;
-static int mes_size = 1024 * 1024 * 5;
+int kvs_is_complete(char *msg, int length, size_t *off){
+
+    if(msg == NULL || length < 0 || off == NULL) return -1;
+    int idx = 0;
+    while(idx < length){
+        int cmd_num = 0; int cmd_len = 0; int key_len = 0; int value_len = 0;
+
+        if(length - idx < 4) return -2;
+
+        if(msg[idx] == '*'){
+            idx += 1;
+            if (idx >= length) return -2;
+            cmd_num = msg[idx] - '0'; 
+            idx += 1;     
+        }
+        
+        if (length - idx < 2) return -2;
+
+        idx += 2;
+
+        if(cmd_num < 1 || cmd_num > 3) return -1;
+        
+        if (length - idx < 4) return -2;
+
+        if(msg[idx] == '$'){
+            if(idx + 2 > length) return -2;
+            idx += 1;
+            if (idx >= length) return -2;
+            cmd_len = msg[idx] - '0';
+            idx += 1;
+            if(length - idx < 2) return -2;
+            idx += 2;
+        }else return -2;
+
+
+        if(length - idx < cmd_len + 2) return -2;
+        idx += cmd_len + 2;
+
+        if(cmd_num == 1){
+            *off = idx;
+            return *off;
+        }
+
+        if(cmd_num >= 2){
+            if (length - idx < 4) return -2;
+
+            if(msg[idx] == '$'){
+                idx += 1;
+                while(idx < length && msg[idx] >= '0' && msg[idx] <= '9'){
+                    key_len = key_len * 10 + (msg[idx] - '0');
+                    idx += 1;
+                } 
+                if (length - idx < 2) return -2;
+                idx += 2;
+
+                if(length - idx < key_len + 2) return -2;
+                idx += key_len + 2;
+            } 
+        }
+
+        if(cmd_num == 2) {
+            *off = idx;
+            return *off;
+        }
+
+        if(cmd_num == 3){ 
+
+            if(msg[idx] == '$'){
+                idx += 1;
+                while(idx < length && msg[idx] >= '0' && msg[idx] <= '9'){
+                    value_len = value_len * 10 + (msg[idx] - '0');
+                    idx += 1; 
+                } 
+                if (length - idx < 2) return -2;
+                idx += 2;
+
+                if(length - idx < value_len + 2) return -2;
+                idx += value_len + 2;
+            }
+        }
+
+        *off = idx;
+        return *off;
+    }
+    return 0;
+}
+#endif
+static size_t mes_len = 0;
+static size_t mes_size = 1024 * 1024 * 1;
 
 void kvs_protocol_reset(void){
     mes_len = 0;
 }
 
-int kvs_protocol(char *msg, int length, char *response){ 
+int kvs_protocol(char *msg, int length, char **response){ 
 
-    int key_len = 0;
-    int value_len = 0;
-    int push_flag = 0;
-    int packet_len = 0;
-
+    if (msg == NULL || response == NULL || length < 0) return -1;
+    size_t key_len = 0; size_t value_len = 0;
+    size_t packet_len = 0;
+    size_t response_length = 1024 * 1024;
 
     if (mes == NULL) {
         // if(server_cfg.use_mempool == 1){
         //     mes = mp_alloc(pool, 1024 * 1024 * 5);
         //     if(mes) memset(mes, 0, 1024 * 1024 * 5);
         // }else 
-        mes = calloc(1, 1024 * 1024 * 5);
+        mes = calloc(1, mes_size);
         mes_len = 0;
     }
 
-    int need = length + mes_len;
+    size_t need = (size_t)length + mes_len;
     if(need > mes_size){
-        if(need > MAX_BUF_SIZE) {
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL) memcpy(response, err, elen);
-            mes_len = 0;
-            return response ? elen : -1;
+        size_t new_size = mes_size;
+        while(need > new_size) {
+            new_size += 1024 * 1024;
         }
-        mes_size = mes_size + (1024 * 1024 * 1);
-        while(need > mes_size) {
-            mes_size = mes_size + (1024 * 1024 * 1);
-        }
-        void *ptr = realloc(mes, mes_size);
+        void *ptr = realloc(mes, new_size);
         if(ptr == NULL) {
             const char *err = "-ERR frame too large\r\n";
             int elen = (int)strlen(err);
-            if(response != NULL) memcpy(response, err, elen);
+            if(*response != NULL) memcpy(*response, err, elen);
             mes_len = 0;
-            return response ? elen : -1;
+            return *response ? elen : -1;
         }
-        mes = ptr;
+        mes = ptr; mes_size = new_size;
     }
     memcpy(mes + mes_len,msg,length);
 
     mes_len += length;
 
     char *tokens[3] = {NULL, NULL, NULL};
-    int count = 0;
 
-    int total_response_len = 0;
+    size_t total_response_len = 0;
 
     while (mes_len > 0) {
-
+        size_t off = 0;
         key_len = 0; value_len = 0;
-        packet_len = kvs_is_complete(mes, mes_len);
-        if (packet_len == 0) break; 
+        int ret = kvs_is_complete(mes, mes_len, &off);
+        printf("ret:%d\n", ret);
+        if (ret == 0) break; 
+        if (ret < 0){
+            if (ret == -2) break;
+            else {
+                mes_len = 0;
+                const char *err = "-ERR protocol error\r\n";
+                int elen = (int)strlen(err);
+                if (*response) memcpy(*response, err, elen);
+                return elen;
+            }
+        }
+        if (ret > mes_len){
+            const char *err = "-ERR over max range\r\n";
+            int elen = (int)strlen(err);
+            if(*response != NULL) memcpy(*response, err, elen);
+            mes_len = 0;
+            return *response ? elen : -1;
+        }
+
+        packet_len = (size_t)ret;
 
         char *single_cmd = NULL;
-        int single_cmd_size = 128 * 1024;
         single_cmd = malloc((size_t)packet_len + 1);
         if(single_cmd == NULL) {
             const char *err = "-ERR frame too large\r\n";
             int elen = (int)strlen(err);
-            if(response != NULL) memcpy(response, err, elen);
+            if(*response != NULL) memcpy(*response, err, elen);
             mes_len = 0;
-            return response ? elen : -1;
+            return *response ? elen : -1;
         }
         memcpy(single_cmd, mes, packet_len);
         single_cmd[packet_len] = '\0';
 
         uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);
-        
-
-        char *single_response = malloc(1024 * 1024 * 1);
-        if(single_response == NULL) {
-            free(single_cmd); 
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL) memcpy(response, err, elen);
-            mes_len = 0;
-            return response ? elen : -1;
-        }
-        single_response[0] = '\0';
-
-        char *tokens[3] = {NULL, NULL, NULL};
 
         int resp_used = 0;
         int count = kvs_split_token(single_cmd, tokens, packet_len, &key_len, &value_len, &resp_used);
@@ -836,18 +922,34 @@ int kvs_protocol(char *msg, int length, char *response){
             memmove(mes, mes + packet_len, mes_len - packet_len);
             mes_len -= packet_len;
 
-            free(single_cmd); free(single_response);
+            free(single_cmd);
             free(tokens[0]); free(tokens[1]); free(tokens[2]);
 
             const char *err = "-ERR split token error\r\n";
             int elen = (int)strlen(err);
-            if(response != NULL && total_response_len + elen <= 1024 * 1024){
-                memcpy(response + total_response_len, err, elen);
-                total_response_len += elen;
+            if(*response != NULL){
+                if(elen + total_response_len > response_length){
+                    response_length += 1024 * 1024;
+                    void *ptr = realloc(*response, response_length);
+                    if(ptr == NULL) return -2;
+                    *response = ptr;
+                }
+                memcpy(*response + total_response_len, err, (size_t)elen);
+                total_response_len += (size_t)elen;
             }
             break;
         } 
 
+        char *single_response = malloc((size_t)(mes_size));
+        if(single_response == NULL) {
+            free(single_cmd); 
+            const char *err = "-ERR frame too large\r\n";
+            int elen = (int)strlen(err);
+            if(*response != NULL) memcpy(*response, err, elen);
+            mes_len = 0;
+            return *response ? elen : -1;
+        }
+        single_response[0] = '\0';
         resp_used = kvs_protocol_filter(tokens, single_response, &key_len, &value_len);
 
         if(server_cfg.add_save == 1) {
@@ -907,13 +1009,14 @@ int kvs_protocol(char *msg, int length, char *response){
         mes_len -= packet_len;
 
         if (resp_used > 0) {
-            if(response != NULL){
-                if(total_response_len + resp_used > 1024 * 1024) {
-                    free(tokens[0]); free(tokens[1]); free(tokens[2]); 
-                    free(single_cmd); free(single_response);
-                    break;
+            if(*response != NULL){
+                while(total_response_len + resp_used > response_length){
+                    response_length += resp_used;
+                    void *ptr = realloc(*response, response_length);
+                    if(ptr == NULL) return -2;
+                    *response = ptr;
                 }
-                memcpy(response + total_response_len, single_response, resp_used);
+                memcpy(*response + total_response_len, single_response, resp_used);
             }
             total_response_len += resp_used;
         }else {
@@ -921,11 +1024,21 @@ int kvs_protocol(char *msg, int length, char *response){
             //         total_response_len, resp_used, BUFFER_LENGTH);
         }
 
-        free(tokens[0]); free(tokens[1]); free(tokens[2]); 
+        if (tokens[0]) {free(tokens[0]); tokens[0] = NULL;}
+        if (tokens[1]) {free(tokens[1]); tokens[1] = NULL;}
+        if (tokens[2]) {free(tokens[2]); tokens[2] = NULL;} 
+
         free(single_cmd); free(single_response);
         
     }
 
+    if (mes_len == 0 && mes_size > (16u << 20)) {
+        void *p = realloc(mes, (8u << 20)); 
+        if (p) {                               
+            mes = p;
+            mes_size = (8u << 20);
+        }
+    }
     return total_response_len; 
 }
 
@@ -976,7 +1089,7 @@ int origin_size = 0;
 static char *old_mes = NULL;
 
 
-void kvs_txt_load(char *cmd, char *key, char *value, int key_len, int value_len){
+void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len){
 #if ENABLE_ARRAY
     if(strcmp(cmd,"SET") == 0){
         kvs_array_set(globle_array, key, value);
@@ -1069,7 +1182,8 @@ void kvs_add_read(char *cmd, char *key, char *value){
         uint32_t crc_exp;
         memcpy(&crc_exp, p, 4);
 
-        int plen = kvs_is_complete(p + 4, (int)(end - p - 4));
+        size_t off = 0;
+        int plen = kvs_is_complete(p + 4, (int)(end - p - 4), &off);//&off
         if (plen <= 0) {
             fprintf(stderr, "[load] tail incomplete at offset %zu (%zd bytes left)\n",
                     (size_t)(p - addr), (ssize_t)(end - p));

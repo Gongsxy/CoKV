@@ -829,74 +829,95 @@ int kvs_is_complete(char *msg, int length, size_t *off){
     return 0;
 }
 #endif
-static size_t mes_len = 0;
-static size_t mes_size = 1024 * 1024 * 1;
+// static size_t mes_len = 0;
+// static size_t mes_size = 1024 * 1024 * 1;
 
-void kvs_protocol_reset(void){
-    mes_len = 0;
+// void kvs_protocol_reset(void){
+//     mes_len = 0;
+// }
+
+typedef struct {
+    int fd;
+    char  *mes;
+    size_t mes_len;
+    size_t mes_size;        
+} kvs_conn_ctx_t;
+kvs_conn_ctx_t kvs_ctx[1024] = {0};
+
+void kvs_conn_ctx_free(int fd){
+    if (fd < 0 || fd >= 1024) return;
+
+    if (kvs_ctx[fd].mes) {
+        free(kvs_ctx[fd].mes);
+        kvs_ctx[fd].mes = NULL;
+    }
+    kvs_ctx[fd].fd = -1; kvs_ctx[fd].mes_len = 0; kvs_ctx[fd].mes_size = 0;
 }
 
-int kvs_protocol(char *msg, int length, char **response){ 
+int kvs_protocol(int fd, char *msg, int length, char **response){ 
 
-    if (msg == NULL || response == NULL || length < 0) return -1;
+    if (fd < 0 || fd >= 1024 || msg == NULL || response == NULL || length < 0) return -1;
+
+    kvs_ctx[fd].fd = fd;
     size_t key_len = 0; size_t value_len = 0;
     size_t packet_len = 0;
     size_t response_length = 1024 * 1024;
 
-    if (mes == NULL) {
+    if (kvs_ctx[fd].mes == NULL) {
         // if(server_cfg.use_mempool == 1){
         //     mes = mp_alloc(pool, 1024 * 1024 * 5);
         //     if(mes) memset(mes, 0, 1024 * 1024 * 5);
         // }else 
-        mes = calloc(1, mes_size);
-        mes_len = 0;
+        kvs_ctx[fd].mes_size = 1024 * 1024 * 1;
+        kvs_ctx[fd].mes = calloc(1, kvs_ctx[fd].mes_size);
+        kvs_ctx[fd].mes_len = 0;
     }
 
-    size_t need = (size_t)length + mes_len;
-    if(need > mes_size){
-        size_t new_size = mes_size;
+    size_t need = (size_t)length + kvs_ctx[fd].mes_len;
+    if(need > kvs_ctx[fd].mes_size){
+        size_t new_size = kvs_ctx[fd].mes_size;
         while(need > new_size) {
             new_size += 1024 * 1024;
         }
-        void *ptr = realloc(mes, new_size);
+        void *ptr = realloc(kvs_ctx[fd].mes, new_size);
         if(ptr == NULL) {
             const char *err = "-ERR frame too large\r\n";
             int elen = (int)strlen(err);
             if(*response != NULL) memcpy(*response, err, elen);
-            mes_len = 0;
+            kvs_ctx[fd].mes_len = 0;
             return *response ? elen : -1;
         }
-        mes = ptr; mes_size = new_size;
+        kvs_ctx[fd].mes = ptr; kvs_ctx[fd].mes_size = new_size;
     }
-    memcpy(mes + mes_len,msg,length);
+    memcpy(kvs_ctx[fd].mes + kvs_ctx[fd].mes_len, msg, length);
 
-    mes_len += length;
+    kvs_ctx[fd].mes_len += length;
 
     char *tokens[3] = {NULL, NULL, NULL};
 
     size_t total_response_len = 0;
 
-    while (mes_len > 0) {
+    while (kvs_ctx[fd].mes_len > 0) {
         size_t off = 0;
         key_len = 0; value_len = 0;
-        int ret = kvs_is_complete(mes, mes_len, &off);
+        int ret = kvs_is_complete(kvs_ctx[fd].mes, kvs_ctx[fd].mes_len, &off);
         printf("ret:%d\n", ret);
         if (ret == 0) break; 
         if (ret < 0){
             if (ret == -2) break;
             else {
-                mes_len = 0;
+                kvs_ctx[fd].mes_len = 0;
                 const char *err = "-ERR protocol error\r\n";
                 int elen = (int)strlen(err);
                 if (*response) memcpy(*response, err, elen);
                 return elen;
             }
         }
-        if (ret > mes_len){
+        if (ret > kvs_ctx[fd].mes_len){
             const char *err = "-ERR over max range\r\n";
             int elen = (int)strlen(err);
             if(*response != NULL) memcpy(*response, err, elen);
-            mes_len = 0;
+            kvs_ctx[fd].mes_len = 0;
             return *response ? elen : -1;
         }
 
@@ -908,10 +929,10 @@ int kvs_protocol(char *msg, int length, char **response){
             const char *err = "-ERR frame too large\r\n";
             int elen = (int)strlen(err);
             if(*response != NULL) memcpy(*response, err, elen);
-            mes_len = 0;
+            kvs_ctx[fd].mes_len = 0;
             return *response ? elen : -1;
         }
-        memcpy(single_cmd, mes, packet_len);
+        memcpy(single_cmd, kvs_ctx[fd].mes, packet_len);
         single_cmd[packet_len] = '\0';
 
         uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);
@@ -919,8 +940,8 @@ int kvs_protocol(char *msg, int length, char **response){
         int resp_used = 0;
         int count = kvs_split_token(single_cmd, tokens, packet_len, &key_len, &value_len, &resp_used);
         if(count < 0){
-            memmove(mes, mes + packet_len, mes_len - packet_len);
-            mes_len -= packet_len;
+            memmove(kvs_ctx[fd].mes, kvs_ctx[fd].mes + packet_len, kvs_ctx[fd].mes_len - packet_len);
+            kvs_ctx[fd].mes_len -= packet_len;
 
             free(single_cmd);
             free(tokens[0]); free(tokens[1]); free(tokens[2]);
@@ -940,13 +961,13 @@ int kvs_protocol(char *msg, int length, char **response){
             break;
         } 
 
-        char *single_response = malloc((size_t)(mes_size));
+        char *single_response = malloc((size_t)(kvs_ctx[fd].mes_size));
         if(single_response == NULL) {
             free(single_cmd); 
             const char *err = "-ERR frame too large\r\n";
             int elen = (int)strlen(err);
             if(*response != NULL) memcpy(*response, err, elen);
-            mes_len = 0;
+            kvs_ctx[fd].mes_len = 0;
             return *response ? elen : -1;
         }
         single_response[0] = '\0';
@@ -955,7 +976,7 @@ int kvs_protocol(char *msg, int length, char **response){
         if(server_cfg.add_save == 1) {
             if(load_saved_msg == 1 && skip_add_log == 0){
 
-            int fd = get_add_fd();
+            int add_fd = get_add_fd();
 
             uring_info *slot = u_info_alloc();                
             if (!slot) {
@@ -983,7 +1004,7 @@ int kvs_protocol(char *msg, int length, char **response){
                     u_info_free(slot);
                     fprintf(stderr, "[aof] no sqe, drop this record\n");
                 } else {
-                    slot->fd  = fd;
+                    slot->fd  = add_fd;
                     slot->len = packet_len + 4;
                     slot->buffer = malloc(packet_len + 4);
                     if (!slot->buffer) {
@@ -991,7 +1012,7 @@ int kvs_protocol(char *msg, int length, char **response){
                     } else {
                         memcpy(slot->buffer, &crc_ret, 4);
                         memcpy(slot->buffer + 4, single_cmd, packet_len);
-                        io_uring_prep_write(sqe, fd, slot->buffer, packet_len + 4, 0);
+                        io_uring_prep_write(sqe, add_fd, slot->buffer, packet_len + 4, 0);
                         io_uring_sqe_set_data(sqe, slot);
                         if (io_uring_submit(&add_ring) < 0) {              
                             fprintf(stderr, "[aof] submit failed, drop\n");
@@ -1005,16 +1026,18 @@ int kvs_protocol(char *msg, int length, char **response){
             }
         }
 
-        memmove(mes, mes + packet_len, mes_len - packet_len);
-        mes_len -= packet_len;
+        memmove(kvs_ctx[fd].mes, kvs_ctx[fd].mes + packet_len, kvs_ctx[fd].mes_len - packet_len);
+        kvs_ctx[fd].mes_len -= packet_len;
 
         if (resp_used > 0) {
             if(*response != NULL){
                 while(total_response_len + resp_used > response_length){
+                    size_t nc = response_length + resp_used;
                     response_length += resp_used;
                     void *ptr = realloc(*response, response_length);
                     if(ptr == NULL) return -2;
                     *response = ptr;
+                    response_length = nc;
                 }
                 memcpy(*response + total_response_len, single_response, resp_used);
             }
@@ -1029,14 +1052,13 @@ int kvs_protocol(char *msg, int length, char **response){
         if (tokens[2]) {free(tokens[2]); tokens[2] = NULL;} 
 
         free(single_cmd); free(single_response);
-        
     }
 
-    if (mes_len == 0 && mes_size > (16u << 20)) {
-        void *p = realloc(mes, (8u << 20)); 
+    if (kvs_ctx[fd].mes_len == 0 && kvs_ctx[fd].mes_size > (16u << 20)) {
+        void *p = realloc(kvs_ctx[fd].mes, (8u << 20)); 
         if (p) {                               
-            mes = p;
-            mes_size = (8u << 20);
+            kvs_ctx[fd].mes = p;
+            kvs_ctx[fd].mes_size = (8u << 20);
         }
     }
     return total_response_len; 
@@ -1198,7 +1220,7 @@ void kvs_add_read(char *cmd, char *key, char *value){
             break; 
         }
 
-        kvs_protocol(p + 4, plen, NULL);
+        kvs_protocol(fd, p + 4, plen, NULL);
         p += 4 + plen;
         ok++;
     }

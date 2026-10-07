@@ -323,6 +323,7 @@ void read_func(void *arg){
             free(response);
             free(capbuf);
         }
+        kvs_conn_ctx_free(cli_fd);
         nty_close(cli_fd);
         return;
     }
@@ -337,7 +338,7 @@ void read_func(void *arg){
 
         resp_capture_reset();
 
-        int length = kvs_protocol(buf, recv_len, &response);
+        int length = kvs_protocol(cli_fd, buf, recv_len, &response);
         int cap_len = 0;
         struct bpf_get_resp_info *info = resp_capture_read();
 
@@ -353,7 +354,8 @@ void read_func(void *arg){
                     p = realloc(capbuf, new_alloc);
                 }
                 if (p == NULL) {
-                    fprintf(stderr, "capbuf realloc %zu fail\n", new_alloc);
+                    fprintf(stderr, "capbuf realloc %zu fail\n", new_alloc);\
+                    kvs_conn_ctx_free(cli_fd);
                     nty_close(cli_fd);
                     return;
                 }
@@ -383,6 +385,8 @@ void read_func(void *arg){
         }
         
     }
+
+    kvs_conn_ctx_free(cli_fd);
     nty_close(cli_fd);
     malloc_trim(0); 
     if(cfg.use_mempool == 0){

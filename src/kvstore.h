@@ -68,7 +68,8 @@ int check_fd_to_ip(int fd, char *ip);
 
 // connection son;
 
-int kvs_protocol(char *msg, int length, char **response);
+void kvs_conn_ctx_free(int fd);
+int kvs_protocol(int fd, char *msg, int length, char **response);
 
 #if ENABLE_RBTREE
 typedef char * KEY_TYPE;

@@ -149,6 +149,16 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_
 
 	while (node != NULL) {
 		if (node->key_len == key_len && memcmp(node->key, key, key_len) == 0) {
+			char *new_value;
+			new_value = (char *)calloc(1, value_len + 1);
+			// char *new_value = (char *)m_malloc(value_len + 1);
+			if (!new_value) return -2;
+
+			free(node->value);
+			memcpy(new_value, value, value_len);
+
+			node->value = new_value;
+			node->value_len = value_len;
             return 1;  
         }
         node = node->next;

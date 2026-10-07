@@ -306,15 +306,15 @@ void read_func(void *arg){
     }
     char *buf = NULL; char *response = NULL; char *capbuf = NULL;
 
-    size_t cap_alloc = 1024 * 1024;
-
+    size_t response_cap = 1024 * 1024;
+    size_t capbuf_cap   = 1024 * 1024;
     // if(cfg.use_mempool == 1){
     //     buf = mp_alloc(pool, 64 * 1024);
     //     response = mp_alloc(pool, 1024 * 1024 * 1);
     //     capbuf = mp_alloc(pool, 1024 * 1024 * 1);
     // }else {
         buf = calloc(1, 64 * 1024);
-        response = calloc(1, 1024 * 1024 * 1);
+        response = calloc(1, response_cap);
         capbuf = calloc(1, 1024 * 1024 * 1);
     // }
     if (!buf || !response || !capbuf) {
@@ -331,21 +331,21 @@ void read_func(void *arg){
     while(1){
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
         if (recv_len <= 0) {
-            fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
-                    cli_fd, recv_len, errno, strerror(errno));
+            // fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
+            //         cli_fd, recv_len, errno, strerror(errno));
             break;
         }
 
         resp_capture_reset();
 
-        int length = kvs_protocol(cli_fd, buf, recv_len, &response);
+        int length = kvs_protocol(cli_fd, buf, recv_len, &response, &response_cap);
         int cap_len = 0;
         struct bpf_get_resp_info *info = resp_capture_read();
 
         static unsigned long long n = 0;
         if (info != NULL && info->len > 0) {
             int need = (int)info->len;
-            if ((size_t)need > cap_alloc) { 
+            if ((size_t)need > capbuf_cap) { 
                 char *p;
 			    size_t new_alloc = (size_t)need * 2;
                 if(cfg.use_mempool == 1){
@@ -360,7 +360,7 @@ void read_func(void *arg){
                     return;
                 }
                 capbuf = p;
-			    cap_alloc = new_alloc;
+			    capbuf_cap = new_alloc;
 		    }
             cap_len = need;
 

@@ -62,79 +62,14 @@ char load_save_mes(){
 }
 #endif
 
-#if 1
-size_t sync_mes_to_rdma(void){
-
-    int fd = load_save_mes();
-    if(fd <= 0){
-        printf("don't choose load message that has saved\n");
-        return 0;
-    }
-
-    off_t file_sz = lseek(fd, 0, SEEK_END);
-    if(file_sz == (off_t)-1){
-        perror("lseek end");
-        close(fd);
-        return -1;
-    }
-
-    lseek(fd, 0, SEEK_SET);
-    if (file_sz <= 0){
-        printf("snapshot empty, nothing to sync\n");
-        return 0;
-    }
-    if ((size_t)file_sz > g_rdma.buf_size){
-        fprintf(stderr,"快照大小%ld超过rdma buf上限%zu\n", (long)file_sz, g_rdma.buf_size);
-        return -1;
-    }
-
-    // 从磁盘读到master的rdma注册内存g_rdma.buf
-    size_t total_read = 0;
-    off_t off = 0;
-    while(total_read < (size_t)file_sz){
-        ssize_t ret = pread(fd, g_rdma.buf + total_read, (size_t)file_sz - total_read, off);
-        if(ret < 0){close(fd); perror("pread"); return -1;}
-        if(ret == 0) break; // eof
-        total_read += ret;
-        
-    }
-    if (total_read != file_sz){
-        perror("read snapshot fail");
-        return -1;
-    }
-
-    close(fd);
-// printf("[sync] read done %zu\n", total_read);
-    return total_read;
-}
-#else 
-size_t sync_mes_to_rdma(void){
-
-    char mes[] = load_save_mes();
+size_t sync_mes_to_rdma(char **msg, size_t *size){
     
-    if ((size_t)file_sz > g_rdma.buf_size){
-        fprintf(stderr,"快照大小%ld超过rdma buf上限%zu\n", (long)file_sz, g_rdma.buf_size);
-        return -1;
-    }
+    int ret = kvs_hash_save_slave(globle_hash, msg, size);
+    if(ret < 0) return -1;
 
-    // 从磁盘读到master的rdma注册内存g_rdma.buf
-    size_t total_read = 0;
-    off_t off = 0;
-    while(total_read < (size_t)file_sz){
-        ssize_t ret = pread(fd, g_rdma.buf + total_read, (size_t)file_sz - total_read, off);
-        if(ret < 0){close(fd); perror("pread"); return -1;}
-        if(ret == 0) break; // eof
-        total_read += ret;
-        
-    }
-    if (total_read != file_sz){
-        perror("read snapshot fail");
-        return -1;
-    }
-
-    return total_read;
+    return ret;
 }
-#endif
+
 int rdma_send_mes_to_slave(uint32_t length){
 
     if(g_slave.fd < 0){
@@ -267,13 +202,32 @@ void rdma_handshake(void *arg){
 
     if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn, g_rdma.gid_index) != 0){ fprintf(stderr, "modify fail\n"); return ; }
 
+    char *mes = NULL; size_t mes_size = 1024 * 1024 * 1;
+    mes = malloc(mes_size);
+    if(mes){
+        memset(mes, 0, mes_size);
+    }
 
-    int sync_ret = sync_mes_to_rdma();
+    int sync_ret = sync_mes_to_rdma(&mes, &mes_size);
 
-    if(sync_ret < 0){ perror("sync message error"); return ; }
+    if(sync_ret < 0){
+        perror("sync message error");
+        free(mes);
+        return;
+    }
 
-    if(sync_ret > 0 && rdma_send_mes_to_slave((uint32_t)sync_ret) < 0){
-        fprintf(stderr, "rdma write fail\n"); 
+    // if((size_t)sync_ret > g_rdma.buf_size){
+    //     fprintf(stderr, "sync data too large: %d > %zu\n", sync_ret, g_rdma.buf_size);
+    //     free(mes);
+    //     return;
+    // }
+
+    memcpy(g_rdma.buf, mes, sync_ret);
+
+    if (rdma_send_mes_to_slave((uint32_t)sync_ret) < 0) {
+        fprintf(stderr, "rdma write fail\n");
+        free(mes);
+        return;
     }
 
     if(rdma_notify_slave(&g_slave, (uint32_t)sync_ret) < 0){

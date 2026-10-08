@@ -472,10 +472,11 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                     break;
                 }
                 char *tmp = NULL;
+                size_t tmp_size = 1024 * 1024 * 1;
                 if(server_cfg.use_mempool == 1){
-                    tmp = mp_alloc(pool, 1024 * 1024 * 10 + MAC_LEN);
+                    tmp = mp_alloc(pool, tmp_size + MAC_LEN);
                 }else{
-                    tmp = calloc(1, 1024 * 1024 * 10 + MAC_LEN);
+                    tmp = calloc(1, tmp_size + MAC_LEN);
                 }
                 if (!tmp) {
                     length = sprintf(*response, "-ERR out of memory\r\n");
@@ -486,7 +487,7 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
 
                 uint32_t count = (uint32_t)kvs_hash_count(globle_hash);
 
-                int hash_length = kvs_hash_save(globle_hash, tmp, 1024 * 1024 * 10, count);
+                int hash_length = kvs_hash_save(globle_hash, &tmp, &tmp_size, count);
 
                 if (hash_length <= 0) {
                     close(full_fd); globle_full_fd = -1;

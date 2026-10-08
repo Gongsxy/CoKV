@@ -150,53 +150,84 @@ int kvs_add_save(char *msg){
     }
 }
 
-int full_save_to_resp(char *msg, uint32_t length, char *response){
-    if(msg == NULL) return -1;
-
-    static int is_full_save = 0;
-    if(strncmp(msg, "key_len: ", 9) == 0) {
-        is_full_save = 1;
-    }else return -1;
+#define KEY_VALUE_OFF   4
+int full_save_to_resp(char *msg, uint32_t length, char **response, size_t *res_size){
+    if (!msg || !response || !*response || !res_size) return -1;
 
     uint32_t i = 0;
-    if(is_full_save == 1){
-        uint32_t offset = 0;
-        int ret = 0;
-        char key[1024] = {0}; char value[1024] = {0};
-        int k_len; int v_len;
-        while(i < length){
-            if(strncmp(msg + i, "key_len: ", 9) == 0){
-                int len = 0;
-                sscanf(msg + i, "key_len: %d%n", &k_len, &len);
-                ret = sprintf(response + offset, "*3\r\n$3\r\nSET\r\n$%d\r\n", k_len);
-                offset += ret;
-                i += len + 2;
-            }
-            if(strncmp(msg + i, "key: ", 5) == 0){
-                int len = 0;
-                memset(key, 0, 1024);
-                memcpy(key, msg + i + 5, (size_t)k_len);
-                ret = sprintf(response + offset, "%s\r\n", key);
-                offset += ret;
-                i += 5 + k_len + 2;
-            }
-            if(strncmp(msg + i, "value_len: ", 11) == 0){
-                int len = 0;
-                sscanf(msg + i, "value_len: %d%n", &v_len, &len);
-                ret = sprintf(response + offset, "$%d\r\n", v_len);
-                offset += ret;
-                i += len + 2;
-            }
-            if(strncmp(msg + i, "value: ", 7) == 0){
-                int len = 0;
-                memset(value, 0, 1024);
-                memcpy(value, msg + i + 7, (size_t)v_len);
-                ret = sprintf(response + offset, "%s\r\n", value);
-                offset += ret;
-                i += 7 + v_len + 2;
-            }
+    size_t offset = 0;
+    int set_count = 0;
+
+    uint32_t k_len; uint32_t v_len;
+    while(i < length){
+
+        if (length - i < KEY_VALUE_OFF) return -1;
+
+
+        memcpy(&k_len, msg + i, KEY_VALUE_OFF);
+        i += KEY_VALUE_OFF;
+
+        if (k_len > length - i) return -1;
+
+        char *key = msg + i;
+        i += k_len;
+
+        if (length - i < KEY_VALUE_OFF) return -1;
+
+        memcpy(&v_len, msg + i, KEY_VALUE_OFF);
+        i += KEY_VALUE_OFF;
+
+        if (v_len > length - i)
+        return -1;
+
+        char *value = msg + i;
+        i += v_len;
+
+        int ret = snprintf(NULL, 0, "*3\r\n$3\r\nSET\r\n$%u\r\n", k_len);
+        if (offset + (size_t)ret + k_len + 2 > *res_size){
+
+            void *ptr = realloc(*response, (size_t)ret + offset + k_len + 2);
+            if(ptr){
+                *response = ptr;
+                *res_size = (size_t)ret + offset + k_len + 2;
+            }else return -1;
+
         }
-        // printf("res:%s\n", response);
+
+        ret = sprintf(*response + offset, "*3\r\n$3\r\nSET\r\n$%u\r\n", k_len);
+        if (ret < 0 || (size_t)ret >= *res_size - offset) return -1;
+
+        offset += ret;
+
+        
+        memcpy(*response + offset, key, k_len);
+        offset += k_len;
+
+        memcpy(*response + offset, "\r\n", 2);
+        offset += 2;
+
+        ret = snprintf(NULL, 0, "$%u\r\n", v_len);
+        if ((size_t)ret + offset + v_len + 2 > *res_size){
+            void *ptr = realloc(*response, (size_t)ret + offset + v_len + 2);
+            if(ptr){
+                *response = ptr;
+                *res_size = (size_t)ret + offset + v_len + 2;
+            }else return -1;
+        }
+
+        ret = snprintf(*response + offset, *res_size - offset, "$%u\r\n", v_len);
+        if (ret < 0 || (size_t)ret >= *res_size - offset) return -1;
+
+        offset += ret;
+
+        memcpy(*response + offset, value, v_len);
+        offset += v_len;
+
+        memcpy(*response + offset, "\r\n", 2);
+        offset += 2;
+
+        set_count++;
     }
-    return (int)i;
+
+    return (int)offset;
 }

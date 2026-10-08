@@ -8,7 +8,7 @@
 
 #include "resp_capture.h"
 
-#define MAX_ONE  0xFFFF
+#define MAX_SIZE  64 * 1024
 
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
@@ -26,27 +26,36 @@ struct {
 	__type(value, struct bpf_get_resp_info);
 } resp_cap SEC(".maps");
 
-SEC("uprobe//home/samba/kvstore/kvstore:kvs_split_token")
+SEC("uprobe//home/samba/kvstore/kvstore:kvs_protocol")
 
 
-int BPF_UPROBE(handle_kvs_split,char *msg, void *a, void *b, int length, void *c, void *d)
+int BPF_UPROBE(handle_kvs_protocol, void *a, char *msg, int length, void *b, void *c)
 {	
 
 	__u32 zero = 0;
 	struct bpf_get_resp_info *info = bpf_map_lookup_elem(&resp_cap, &zero);
 	if (!info) return 0;
+	
+	__u32 copy_len = (__u32)length;
+    copy_len &= 0xFFFF;                     
+    if (copy_len == 0) return 0;
 
-	__u32 copy_len = (__u32)length & 0xFFFF;
-	if (copy_len == 0) copy_len = 1;;
 
 	__u32 off = info->len;
-	if (off > sizeof(info->resp_info) - MAX_ONE) {
-		info->drop++;
-		return 0;
-	}
+	off &= 0xFFFF;
+
+	if (off + copy_len > MAX_SIZE) {
+        info->drop++;
+        return 0;
+    }
 
 	// info->len = copy_len;
-	bpf_probe_read_user(info->resp_info + off, copy_len, msg);
+	long ret = bpf_probe_read_user(info->resp_info, copy_len, msg);
+	if (ret < 0) {
+        info->drop++;
+        return 0;
+    }
+
 	info->len = off + copy_len;
 
 	// bpf_perf_event_output(ctx, &channel, BPF_F_CURRENT_CPU, info, sizeof(*info));

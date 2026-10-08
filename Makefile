@@ -11,8 +11,10 @@ BIN = kvstore
 OUTPUT_DIR = ./build
 
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
+SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
 
-SOURCES_T := $(filter-out $ $(SRC_DIR)/rbtree.c,  $(SOURCES))
+SOURCES_T := $(filter-out $ $(SRC_DIR)/rbtree.c, $(SRC_DIR)/proactor.c, $(SOURCES))
+SOURCES_T_SLAVE := $(filter-out $ $(SRC_SLAVE)/rbtree.c $(SRC_SLAVE)/kvs_push.c $(SRC_SLAVE)/reactor_b.c $(SRC_SLAVE)/proactor.c, $(SOURCES_SLAVE))
 SOURCES_TEST := $(filter-out $ $(SRC_DIR)/ntyco.c $(SRC_DIR)/proactor.c $(SRC_DIR)/reactor.c,  $(SOURCES))
 
 SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
@@ -55,7 +57,7 @@ testcase_characters:
 
 
 server_slave:
-	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl -lsodium -lz
+	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_T_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl -lsodium -lz
 
 # $(SOURCES_TEST)
 test:

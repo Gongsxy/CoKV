@@ -30,7 +30,7 @@ void cfg_init(void) {
     if (done) return;
     done = 1;
 
-	load_config("config/server_slave.conf", &cfg);
+	load_config("config/server.conf", &cfg);
     pool = mp_create(4096);
 }
 
@@ -138,7 +138,7 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 
 
 // mp
-int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len) {
+int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len) {
 
 	if (!hash || !key || key_len < 0 || !value || value_len < 0) return -1;
 
@@ -149,6 +149,16 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
 
 	while (node != NULL) {
 		if (node->key_len == key_len && memcmp(node->key, key, key_len) == 0) {
+			char *new_value;
+			new_value = (char *)calloc(1, value_len + 1);
+			// char *new_value = (char *)m_malloc(value_len + 1);
+			if (!new_value) return -2;
+
+			free(node->value);
+			memcpy(new_value, value, value_len);
+
+			node->value = new_value;
+			node->value_len = value_len;
             return 1;  
         }
         node = node->next;
@@ -165,7 +175,7 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
 }
 
 
-char * kvs_hash_get(kvs_hash_t *hash, char *key, int key_len, int *value_len) {
+char * kvs_hash_get(kvs_hash_t *hash, char *key, size_t key_len, size_t *value_len) {
 
 	if (!hash || !key || key_len < 0) return NULL;
 
@@ -190,7 +200,7 @@ int kvs_hash_count(kvs_hash_t *hash) {
     return hash ? hash->count : 0;
 }
 
-int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len) {
+int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len) {
 	if (!hash || !key || key_len < 0) return -2;
 
 	int idx = _hash(key, key_len, hash->max_slots);
@@ -229,7 +239,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, int key_len) {
 	return 0;
 }
 
-int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int value_len){
+int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len){
     if (!hash || !key || key_len < 0 || !value || value_len < 0) return -2;
 
     int idx = _hash(key, key_len, hash->max_slots);
@@ -259,7 +269,7 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, int key_len, int valu
     return 0;
 }
 
-int kvs_hash_exist(kvs_hash_t *hash, char *key, int key_len) {
+int kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len) {
 	return kvs_hash_get(hash, key, key_len, NULL) ? 0 : 1;
 }
 
@@ -277,12 +287,12 @@ static int _serialize_size(kvs_hash_t *hash) {
     return total;
 }
 
-int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length, uint32_t count){
+int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
     if (!hash || !msg ) return -1;
 
-	char *payload = msg + FULL_HDR_LEN;
+	char *payload = *msg + FULL_HDR_LEN;
 	char *p = payload;
-	char *end = msg + length;
+	char *end = *msg + *length;
 
     int i = 0;
     for(i = 0; i < hash->max_slots; i++){
@@ -292,7 +302,16 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length, uint32_t count){
 			
 			size_t need = CRC_LEN + KEY_VALUE_OFF + node->key_len + KEY_VALUE_OFF + node->value_len;
 			if (p + need > end) {
-                return -1;
+				size_t p_offset = p - *msg;
+				void *ptr = realloc(*msg, *length + need);
+				if(ptr){
+					*length += need;
+					*msg = ptr;
+					
+					payload = *msg + FULL_HDR_LEN;
+					p = *msg + p_offset;
+					end = *msg + *length;
+				}else return -1;
             }
 		
 			uint32_t klen = node->key_len;
@@ -315,15 +334,58 @@ int kvs_hash_save(kvs_hash_t *hash, char *msg, size_t length, uint32_t count){
     }
 
 	uint32_t pack_len = (uint32_t)(p - payload);  
-	memcpy(msg + CRC_LEN, &pack_len, PACK_LEN_OFF);
+	memcpy(*msg + CRC_LEN, &pack_len, PACK_LEN_OFF);
 
-	memcpy(msg + CRC_LEN + PACK_LEN_OFF, "V1.0", VERSION_OFF);
-	memcpy(msg + CRC_LEN + PACK_LEN_OFF + VERSION_OFF, &count, COUNT_OFF);
+	memcpy(*msg + CRC_LEN + PACK_LEN_OFF, "V1.0", VERSION_OFF);
+	memcpy(*msg + CRC_LEN + PACK_LEN_OFF + VERSION_OFF, &count, COUNT_OFF);
 
-	uint32_t crc_total = (uint32_t)crc32(0L, msg + CRC_LEN, (uInt)(p - msg - CRC_LEN));
-	memcpy(msg, &crc_total, CRC_LEN);
+	uint32_t crc_total = (uint32_t)crc32(0L, *msg + CRC_LEN, (uInt)(p - *msg - CRC_LEN));
+	memcpy(*msg, &crc_total, CRC_LEN);
 
 
     return (int)(FULL_HDR_LEN + pack_len);
 }
 
+int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
+    if (!hash || !msg ) return -1;
+
+	char *p = *msg;
+	char *end = *msg + *length;
+
+    int i = 0;
+    for(i = 0; i < hash->max_slots; i++){
+
+        hashnode_t *node = hash->nodes[i];
+        while(node != NULL){
+			
+			size_t need = KEY_VALUE_OFF + node->key_len + KEY_VALUE_OFF + node->value_len;
+			if (p + need > end) {
+				size_t p_offset = p - *msg;
+				void *ptr = realloc(*msg, *length + need);
+				if(ptr){
+					*length += need;
+					*msg = ptr;
+
+					p = *msg + p_offset;
+					end = *msg + *length;
+				}else return -1;
+            }
+		
+			uint32_t klen = node->key_len;
+			memcpy(p, &klen, KEY_VALUE_OFF); p += KEY_VALUE_OFF;
+			memcpy(p, node->key, node->key_len); p += node->key_len;
+
+			uint32_t vlen = node->value_len;
+			memcpy(p, &vlen, KEY_VALUE_OFF); p += KEY_VALUE_OFF;
+			memcpy(p, node->value, node->value_len); p += node->value_len;
+
+            node = node->next;
+        }
+
+    }
+
+	uint32_t pack_len = (uint32_t)(p - *msg);  
+
+
+    return (int)(pack_len);
+}

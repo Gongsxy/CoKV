@@ -248,6 +248,55 @@ void rdma_handshake(void *arg){
     return ;
 }
 
+
+typedef struct {
+    int    fd;
+    char  *buf;        /* 队列 */
+    size_t len;        /* 有效字节数 */
+    size_t off;        /* 已发出偏移 */
+    int    sending;    /* 是否已有发送协程在跑（保证同一时刻只有一个写者） */
+    int    closed;     /* 读端已结束 */
+} send_resp_t;
+
+static int send_resp_append(send_resp_t *s, char *msg, int length){
+
+    if(s == NULL || msg == NULL || length == 0) return -1;
+
+    void *p = realloc(s->buf, s->len + length);
+    if(p == NULL) return -2;
+    s->buf = p;
+
+    memcpy(s->buf + s->len, msg, length);
+    s->len += length;
+
+    return 0;
+}
+
+
+void send_func(void *arg){
+
+    send_resp_t *sr = arg;
+
+    while(sr->off < sr->len){
+        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, sr->len - sr->off, 0);
+        if(n > 0) {sr->off += (size_t)n; continue;}
+        if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            continue;
+        }
+        break;
+    }
+
+    if(sr->off >= sr->len) {sr->off = 0; sr->len = 0;}
+    sr->sending = 0;
+
+    if (sr->closed && sr->len == 0) {
+        nty_close(sr->fd);
+        free(sr->buf);
+        free(sr);
+    }
+    // nty_send(send_resp[cli_fd]->fd, send_resp[cli_fd]->buf, send_resp[cli_fd]->len, 0);
+}
+
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
     if(cfg.use_mempool == 0){
@@ -282,6 +331,13 @@ void read_func(void *arg){
         return;
     }
 
+    send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
+    if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
+    sr->fd = cli_fd;
+
+    send_resp_t *sr_slave = calloc(1, sizeof(send_resp_t));;
+    if(!sr_slave) { free(buf); free(response); nty_close(cli_fd); return; }
+    sr_slave->fd = g_slave.fd;
     while(1){
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
         if (recv_len <= 0) {
@@ -319,13 +375,26 @@ void read_func(void *arg){
             cap_len = need;
 
             memcpy(capbuf, info->resp_info, info->len); 
-            if( (strncmp(capbuf, "*3\r\n$3\r\nSET\r\n", 13) == 0 || strncmp(capbuf, "*3\r\n$3\r\nMOD\r\n", 13) == 0) && g_slave.fd >= 0){
-                nty_send(g_slave.fd, capbuf, info->len, 0);
+            if(g_slave.fd >= 0){
+                
+                send_resp_append(sr_slave, capbuf, cap_len);
+            
+                if(!sr_slave->sending){
+                    sr_slave->sending = 1;
+                    nty_coroutine *send_co;
+                    nty_coroutine_create(&send_co, send_func, sr_slave);
+                }
             }  
         }
 
         if(length > 0){
-            int ret = nty_send(cli_fd, response, length, 0);
+            send_resp_append(sr, response, length);
+            
+            if(!sr->sending){
+                sr->sending = 1;
+                nty_coroutine *send_co;
+                nty_coroutine_create(&send_co, send_func, sr);
+            }
         }
 
         
@@ -338,6 +407,18 @@ void read_func(void *arg){
             malloc_trim(0);
         }
         
+    }
+
+    sr->closed = 1;
+    if (!sr->sending) { 
+        nty_close(sr->fd);
+        free(sr->buf);
+        free(sr);
+    }
+    sr_slave->closed = 1;
+    if (!sr_slave->sending) { 
+        free(sr_slave->buf);
+        free(sr_slave);
     }
 
     kvs_conn_ctx_free(cli_fd);

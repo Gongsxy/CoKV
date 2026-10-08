@@ -13,8 +13,7 @@
 
 #define G_RMDA_BUF_SIZE 1024 * 1024 * 5
 
-extern int full_save_to_resp(char *msg, uint32_t length, char *response);
-extern int kvs_protocol(char *msg, int length, char *response);
+extern int full_save_to_resp(char *msg, uint32_t length, char **response, size_t *res_size);
 
 Config cfg;
 
@@ -101,6 +100,7 @@ void rdma_handshake(void *arg)
 
     rdma_modify(g_rdma_slave.qp, local_psn, g_s_slave.remote_qpn, &g_s_slave.remote_gid, g_s_slave.remote_psn, g_rdma_slave.gid_index);
 
+    printf("master load finish\n");
 
     uint32_t recv_len_net;
     ssize_t mes_rv = nty_recv(fd, &recv_len_net, sizeof(recv_len_net),0);
@@ -111,27 +111,42 @@ void rdma_handshake(void *arg)
     }
     transfer_len = ntohl(recv_len_net);
 
-
     if(transfer_len != 0){
-        char *resp_switch = calloc(1, 1024 * 1024 * 5);
-        char *resp_out    = calloc(1, 5 * 1024 * 1024);
-        int length = full_save_to_resp(g_rdma_slave.buf, transfer_len, resp_switch);
+        size_t response_size = 1024 * 1024 * 1;
+        size_t msg_size = 1024 * 1024 * 1;
+        char *resp_switch = calloc(1, msg_size);
+        char *resp_out    = calloc(1, response_size);
+
+        int length = full_save_to_resp(g_rdma_slave.buf, transfer_len, &resp_switch, &msg_size);
+
         if(length > 0){
-            if(res == NULL){
-                res = calloc(1, 1024 * 1024);
+            if(length > msg_size){
+                void *p = realloc(resp_switch, msg_size + length);
+                if(p){
+                    msg_size += length;
+                    resp_switch = p;
+                }else return ;
             }
-            int recv_length = kvs_protocol(resp_switch, length, resp_out);
+            if(length > response_size){
+                void *p = realloc(resp_out, response_size + length);
+                if(p){
+                    response_size += length;
+                    resp_out = p;
+                }else return ;
+            }
+
+            
+            int recv_length = kvs_protocol(fd, resp_switch, length, &resp_out, &response_size);
         }else{
-            kvs_protocol(g_rdma_slave.buf, transfer_len, resp_switch);
+            kvs_protocol(fd, g_rdma_slave.buf, transfer_len, &resp_switch, &msg_size);
         }
         free(resp_switch); 
         free(resp_out);
     }
     uint32_t ack = htonl(1);
     nty_send(fd, &ack, sizeof(ack), 0);
-
-    char *cbuf = calloc(1, 1024 * 1024 * 5);
-    char *cres = calloc(1, 1024 * 1024);
+    size_t buf_size = 1024 * 1024 * 1; size_t res_size = 1024 * 1024 * 1;
+    char *cbuf = calloc(1, buf_size); char *cres = calloc(1, res_size);
     if (!cbuf || !cres) {
         free(cbuf); free(cres);
         close(fd);
@@ -140,16 +155,30 @@ void rdma_handshake(void *arg)
 
 
     while (1) {
-        memset(cbuf, 0, 1024 * 1024 * 5);
-        memset(cres, 0, 1024 * 1024);
+        memset(cbuf, 0, buf_size); memset(cres, 0, res_size);
 
-        int n = nty_recv(fd, cbuf, 1024 * 1024 * 5, 0);  
+        int n = nty_recv(fd, cbuf, buf_size, 0);  
+
         if (n <= 0) {
             // printf("[slave] master gone, n=%d\n", n);
             break;
         }
 
-        int rlen = kvs_protocol(cbuf, n, cres);
+        // if(n > buf_size){
+        //     void *p = realloc(cbuf, buf_size + n);
+        //     if(p){
+        //         buf_size += n;
+        //         cbuf = p;
+        //     }else return ;
+        // }
+        // if(n > res_size){
+        //     void *p = realloc(cres, res_size + n);
+        //     if(p){
+        //         res_size += n;
+        //         cres = p;
+        //     }else return ;
+        // }
+        int rlen = kvs_protocol(fd, cbuf, n, &cres, &res_size);
     }
 
     free(cbuf);
@@ -167,8 +196,6 @@ typedef struct {
     int    sending;    /* 是否已有发送协程在跑（保证同一时刻只有一个写者） */
     int    closed;     /* 读端已结束 */
 } send_resp_t;
-
-
 
 static int send_resp_append(send_resp_t *s, char *msg, int length){
 
@@ -202,7 +229,7 @@ void send_func(void *arg){
     sr->sending = 0;
 
     if (sr->closed && sr->len == 0) {
-        nty_close(sr->fd);
+        // nty_close(sr->fd);
         free(sr->buf);
         free(sr);
     }
@@ -211,65 +238,78 @@ void send_func(void *arg){
 
 
 void read_func(void *arg){
-
     int cli_fd = *(int *)arg;
-    free(arg);
+    if(cfg.use_mempool == 0){
+        free(arg);
+    }
 
     if(cli_fd < 0){
         perror("read arg error");
         return ;
     }
+    const int ctx_fd = cli_fd;
 
-    char *buf = calloc(1, 1024 * 64);
-    char *resp = calloc(1, 1024 * 1024);
-    if (!buf || !resp) {
-        free(buf);
-        free(resp);
+    char *buf = NULL; char *response = NULL; char *capbuf = NULL;
+
+    size_t response_cap = 1024 * 1024;
+    size_t capbuf_cap   = 1024 * 1024;
+    // if(cfg.use_mempool == 1){
+    //     buf = mp_alloc(pool, 64 * 1024);
+    //     response = mp_alloc(pool, 1024 * 1024 * 1);
+    //     capbuf = mp_alloc(pool, 1024 * 1024 * 1);
+    // }else {
+        buf = calloc(1, 64 * 1024);
+        response = calloc(1, response_cap);
+        capbuf = calloc(1, 1024 * 1024 * 1);
+    // }
+    if (!buf || !response || !capbuf) {
+        if(cfg.use_mempool == 0){
+            free(buf);
+            free(response);
+            free(capbuf);
+        }
+        kvs_conn_ctx_free(cli_fd);
         nty_close(cli_fd);
         return;
     }
-    
+
     send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
-    if(!sr) { free(buf); free(resp); nty_close(cli_fd); return; }
+    if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
     sr->fd = cli_fd;
 
     while(1){
-
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
-
-        if (recv_len == 0) break;
-        if (recv_len < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
-            fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
-                    cli_fd, recv_len, errno, strerror(errno));
+        if (recv_len <= 0) {
+            // fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
+            //         cli_fd, recv_len, errno, strerror(errno));
             break;
         }
+
+        int length = kvs_protocol(cli_fd, buf, recv_len, &response, &response_cap);
+        int cap_len = 0;
         
-        int length = 0;
 
-        length = kvs_protocol_slave(buf, recv_len, resp);
+        if(length > 0){
 
-        if (length > 0) {
-
-            nty_coroutine *send_co;
-
-            send_resp_append(sr, resp, length);
+            send_resp_append(sr, response, length);
             
             if(!sr->sending){
                 sr->sending = 1;
                 nty_coroutine *send_co;
                 nty_coroutine_create(&send_co, send_func, sr);
             }
-        }
 
+        }
+ 
         static uint64_t last_trim_ms = 0;
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (now_ms - last_trim_ms >= 1000) {
+        if (now_ms - last_trim_ms >= 1000) {        
             last_trim_ms = now_ms;
             malloc_trim(0);
         }
+        
     }
     sr->closed = 1;
     if (!sr->sending) { 
@@ -278,9 +318,15 @@ void read_func(void *arg){
         free(sr);
     }
 
-    malloc_trim(0);
-    free(buf);    
-    free(resp);
+
+    kvs_conn_ctx_free(ctx_fd);
+    nty_close(cli_fd);
+    malloc_trim(0); 
+    if(cfg.use_mempool == 0){
+        free(buf);    
+        free(response);
+        free(capbuf);
+    }
 }
 
 

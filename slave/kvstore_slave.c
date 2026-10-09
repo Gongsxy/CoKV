@@ -837,6 +837,22 @@ void kvs_conn_ctx_free(int fd){
 
 int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size){ 
 
+// static unsigned long long in_cnt = 0, in_total = 0;
+//     if (msg != NULL && length > 0) {
+//         in_cnt++; in_total += (unsigned long long)length;
+//         if (in_cnt <= 10 || (in_cnt % 50) == 0) {
+//             fprintf(stderr, "[slave-in] #%llu fd=%d len=%d total=%llu head=",
+//                     in_cnt, fd, length, in_total);
+//             for (int i = 0; i < 32 && i < length; i++)
+//                 fprintf(stderr, "%02x ", (unsigned char)msg[i]);
+//             fprintf(stderr, "\n");
+//         }
+//     }
+
+
+
+
+
     if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
 
     kvs_ctx[fd].fd = fd;
@@ -885,7 +901,26 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
         if (ret < 0){
             if (ret == -2) break;
             else {
+
+// fprintf(stderr, "[slave-err] fd=%d mes_len=%zu head=",
+//                         fd, kvs_ctx[fd].mes_len);
+//                 for (size_t i = 0; i < 32 && i < kvs_ctx[fd].mes_len; i++)
+//                     fprintf(stderr, "%02x ", (unsigned char)kvs_ctx[fd].mes[i]);
+//                 fprintf(stderr, "\n");
+
+
+
+// fprintf(stderr, "[slave-err] PROTOCOL ERROR fd=%d ¶ªÆú %zu ×Ö½Ú\n",
+//                         fd, kvs_ctx[fd].mes_len);
+
+
+
                 kvs_ctx[fd].mes_len = 0;
+
+
+
+
+
                 const char *err = "-ERR protocol error\r\n";
                 int elen = (int)strlen(err);
                 if (response != NULL && *response) memcpy(*response, err, elen);
@@ -901,6 +936,15 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
         }
 
         packet_len = (size_t)ret;
+
+// static unsigned long long frames = 0;
+//             if (++frames <= 10 || (frames % 200) == 0)
+//                 fprintf(stderr, "[slave-frame] #%llu fd=%d packet=%zu left=%zu\n",
+//                         frames, fd, packet_len, kvs_ctx[fd].mes_len);
+
+
+
+
 
         char *single_cmd = NULL;
         single_cmd = malloc((size_t)packet_len + 1);
@@ -1057,7 +1101,14 @@ static int mes_slave_len;
 static int mes_slave_size = 1024 * 1024 * 5;
 int kvs_protocol_slave(int fd, char *msg, int length, char **response, size_t *response_size){ 
 static unsigned long long in_cnt = 0, in_total = 0;
-      
+    unsigned int ck = 0;
+    for (int i = 0; i < length; i++) ck = ck * 31u + (unsigned char)msg[i];
+    in_cnt++; in_total += (unsigned long long)length;
+    fprintf(stderr, "[slave-in] cnt=%llu len=%d cum=%llu ck=%08x\n",
+            in_cnt, length, in_total, ck);
+
+
+            
     if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
 
     kvs_ctx[fd].fd = fd;

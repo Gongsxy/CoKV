@@ -217,7 +217,10 @@ void send_func(void *arg){
     send_resp_t *sr = arg;
 
     while(sr->off < sr->len){
-        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, sr->len - sr->off, 0);
+        size_t chunk = sr->len - sr->off;
+        if (chunk > 64 * 1024) chunk = 64 * 1024;
+
+        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, chunk, 0);
         if(n > 0) {sr->off += (size_t)n; continue;}
         if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
             continue;
@@ -236,7 +239,80 @@ void send_func(void *arg){
     // nty_send(send_resp[cli_fd]->fd, send_resp[cli_fd]->buf, send_resp[cli_fd]->len, 0);
 }
 
+#if 0
+void read_func(void *arg){
 
+    int cli_fd = *(int *)arg;
+    free(arg);
+
+    if(cli_fd < 0){
+        perror("read arg error");
+        return ;
+    }
+
+    char *buf = calloc(1, 1024 * 64);
+    char *resp = calloc(1, 1024 * 1024);
+    if (!buf || !resp) {
+        free(buf);
+        free(resp);
+        nty_close(cli_fd);
+        return;
+    }
+    
+    send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
+    if(!sr) { free(buf); free(resp); nty_close(cli_fd); return; }
+    sr->fd = cli_fd;
+
+    while(1){
+
+        int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
+
+        if (recv_len == 0) break;
+        if (recv_len < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+            fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
+                    cli_fd, recv_len, errno, strerror(errno));
+            break;
+        }
+        
+        int length = 0;
+
+        length = kvs_protocol_slave(buf, recv_len, resp);
+
+        if (length > 0) {
+
+            nty_coroutine *send_co;
+
+            send_resp_append(sr, resp, length);
+            
+            if(!sr->sending){
+                sr->sending = 1;
+                nty_coroutine *send_co;
+                nty_coroutine_create(&send_co, send_func, sr);
+            }
+        }
+
+        static uint64_t last_trim_ms = 0;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+        if (now_ms - last_trim_ms >= 1000) {
+            last_trim_ms = now_ms;
+            malloc_trim(0);
+        }
+    }
+    sr->closed = 1;
+    if (!sr->sending) { 
+        nty_close(sr->fd);
+        free(sr->buf);
+        free(sr);
+    }
+
+    malloc_trim(0);
+    free(buf);    
+    free(resp);
+}
+#else 
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
     if(cfg.use_mempool == 0){
@@ -277,20 +353,36 @@ void read_func(void *arg){
     if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
     sr->fd = cli_fd;
 
+
+static unsigned long long slave_recv_total = 0;
+
     while(1){
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
+
+slave_recv_total += (unsigned long long)recv_len;
+
+
+if (recv_len > 0) {
+// fprintf(stderr,
+//         "[SLAVE_RECV_TOTAL] n=%d total=%llu\n",
+//          recv_len, slave_recv_total);
+
         if (recv_len <= 0) {
             // fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
             //         cli_fd, recv_len, errno, strerror(errno));
             break;
         }
+}
+
+
 
         int length = kvs_protocol(cli_fd, buf, recv_len, &response, &response_cap);
+
         int cap_len = 0;
         
-
+#if 1
         if(length > 0){
-
+#if 0
             send_resp_append(sr, response, length);
             
             if(!sr->sending){
@@ -298,9 +390,73 @@ void read_func(void *arg){
                 nty_coroutine *send_co;
                 nty_coroutine_create(&send_co, send_func, sr);
             }
+#else 
+            size_t off = 0;
+            while (off < (size_t)length) {
+                ssize_t n = nty_send(cli_fd, response + off, (size_t)length - off, 0);
 
+                if (n > 0) {
+                    off += (size_t)n;
+                    continue;
+                }
+
+                if (n < 0 && errno == EINTR) {
+                    continue;
+                }
+
+                // 发送失败，退出连接处理循环
+                goto cleanup;
+
+            }
+#endif
         }
- 
+#else 
+if (length > 0) {
+    size_t off = 0;
+
+    while (off < (size_t)length) {
+        ssize_t n = nty_send(
+            cli_fd,
+            response + off,
+            (size_t)length - off,
+            0
+        );
+
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
+        }
+
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
+        fprintf(stderr,
+                "send failed: fd=%d n=%zd errno=%d (%s)\n",
+                cli_fd, n, errno, strerror(errno));
+        
+        
+        static uint64_t last_trim_ms = 0;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+        if (now_ms - last_trim_ms >= 1000) {        
+            last_trim_ms = now_ms;
+            malloc_trim(0);
+        }
+
+
+        kvs_conn_ctx_free(cli_fd);
+        nty_close(cli_fd);
+
+        if (cfg.use_mempool == 0) {
+            free(buf);
+            free(response);
+        }
+        return;
+    }
+}
+#endif
         static uint64_t last_trim_ms = 0;
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -319,16 +475,15 @@ void read_func(void *arg){
     }
 
 
-    kvs_conn_ctx_free(ctx_fd);
+    cleanup:
+    kvs_conn_ctx_free(cli_fd);
     nty_close(cli_fd);
-    malloc_trim(0); 
-    if(cfg.use_mempool == 0){
-        free(buf);    
-        free(response);
-        free(capbuf);
-    }
+    free(buf);
+    free(response);
+    free(arg);
+    return ;
 }
-
+#endif
 
 void accept_func(void *arg){
 
@@ -378,6 +533,12 @@ void accept_func(void *arg){
         int *arg = calloc(1, sizeof(int));
         *arg = client_fd;
         if (!arg) { nty_close(client_fd); continue; }
+
+        int sndbuf = 8 * 1024 * 1024;
+        int rcvbuf = 8 * 1024 * 1024;
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
         nty_coroutine *read_co;
         nty_coroutine_create(&read_co, read_func, arg);
     }

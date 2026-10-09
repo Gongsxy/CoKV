@@ -8,27 +8,18 @@
 
 #include "resp_capture.h"
 
-#define MAX_SIZE  64 * 1024
-
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct {
-	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-	__uint(key_size, sizeof(int));
-	__uint(value_size, sizeof(int));
-} channel SEC(".maps");
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 16 * 1024 * 1024);
 
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, struct bpf_get_resp_info);
-} resp_cap SEC(".maps");
+} resp_ringbuf  SEC(".maps");
+
 
 SEC("uprobe//home/samba/kvstore/kvstore:kvs_protocol")
-
-
+#if 0
 int BPF_UPROBE(handle_kvs_protocol, void *a, char *msg, int length, void *b, void *c)
 {	
 
@@ -62,3 +53,44 @@ int BPF_UPROBE(handle_kvs_protocol, void *a, char *msg, int length, void *b, voi
 
     return 0;
 }
+#else
+// int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size)
+// int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size_t *value_len, int *resp_total)
+int BPF_UPROBE(handle_kvs_protocol, void *a, char *msg, int length, void *b, void *c)
+{	
+	if (length <= 0 || length > MAX_SIZE) return 0;
+	
+	__u32 copy_len = (__u32)length;
+    copy_len &= 0xFFFF;
+    if (copy_len == 0) return 0;
+
+
+	char head[12];
+	if (copy_len < 12) return 0;
+
+    long r = bpf_probe_read_user(head, sizeof(head), msg);
+    if (r < 0) return 0;
+
+	resp_info *e = bpf_ringbuf_reserve(&resp_ringbuf, sizeof(resp_info), 0);
+	if(e == NULL) return 0;
+
+	e->len = (__u32)copy_len;
+
+#if 0
+	e->fd = (__u32)fd; e->len = (__u32)copy_len;
+
+	long ret = bpf_probe_read_user(e->resp_info, copy_len, msg);
+	if(ret < 0){bpf_ringbuf_discard(e, 0); return 0;}
+
+	bpf_ringbuf_submit(e, 0);
+#else 
+
+	long ret = bpf_probe_read_user(e->resp_info, copy_len, msg);
+	if(ret < 0){bpf_ringbuf_discard(e, 0); return 0;}
+
+	bpf_ringbuf_submit(e, 0);
+
+#endif
+	return 0;
+}
+#endif

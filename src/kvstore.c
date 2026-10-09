@@ -878,6 +878,23 @@ void kvs_conn_ctx_free(int fd){
 
 int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size){ 
 
+
+// static unsigned long long in_cnt = 0, in_total = 0;
+//     if (msg != NULL && length > 0) {
+//         in_cnt++; in_total += (unsigned long long)length;
+//         if (in_cnt <= 20) {
+//             fprintf(stderr, "[slave-in] #%llu fd=%d len=%d total=%llu mes_len=%zu head: ",
+//                     in_cnt, fd, length, in_total,
+//                     (fd >= 0 && fd < 1024) ? kvs_ctx[fd].mes_len : 0);
+//             for (int i = 0; i < 48 && i < length; i++)
+//                 fprintf(stderr, "%02x ", (unsigned char)msg[i]);
+//             fprintf(stderr, "\n");
+//         }
+//     }
+
+
+
+
     if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
 
     kvs_ctx[fd].fd = fd;
@@ -1465,7 +1482,7 @@ int main(int argc, char const *argv[]){
     }
 
     rdma_init(&gr);
-    if(resp_capture() < 0) return -1;
+
     // if(server_cfg.use_mempool == 0){
     //     malloc_trim(0);
     // }

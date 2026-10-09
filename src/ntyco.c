@@ -62,6 +62,11 @@ char load_save_mes(){
 }
 #endif
 
+
+extern int resp_capture_poll(int max_records);
+void master_forward_to_slave(const char *data, unsigned len);
+
+
 size_t sync_mes_to_rdma(char **msg, size_t *size){
     
     int ret = kvs_hash_save_slave(globle_hash, msg, size);
@@ -256,6 +261,7 @@ typedef struct {
     size_t off;        /* 已发出偏移 */
     int    sending;    /* 是否已有发送协程在跑（保证同一时刻只有一个写者） */
     int    closed;     /* 读端已结束 */
+    int    want;       /* ★ 新增：队列里又追加了新数据，写者协程别退出 */
 } send_resp_t;
 
 static int send_resp_append(send_resp_t *s, char *msg, int length){
@@ -273,29 +279,182 @@ static int send_resp_append(send_resp_t *s, char *msg, int length){
 }
 
 
+static send_resp_t g_slave_sr = { .fd = -1, .sending = 0 };
+
+static void slave_send_func(void *arg)
+{
+    send_resp_t *sr = &g_slave_sr;
+
+static unsigned long long sent_total = 0, sent_calls = 0;
+
+static unsigned long long total_sent = 0;
+    
+    while (1) {
+
+        if (sr->off >= sr->len) {
+            sr->off = 0;
+            sr->len = 0;
+            sr->sending = 0;
+            return;
+        }
+
+        size_t chunk = sr->len - sr->off;
+        if (chunk > 64 * 1024) chunk = 64 * 1024;
+        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, chunk, 0);
+
+
+
+
+        if (n > 0) {
+            
+            
+total_sent += (unsigned long long)n;
+
+
+        sr->off += (size_t)n;
+
+
+
+
+            continue;
+        }
+
+
+
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+            continue;
+#if 0
+        fprintf(stderr, "[send] n=%zd errno=%d(%s) — 停止发送\n", n, errno, strerror(errno));
+        sr->off = 0;
+        sr->len = 0;
+        sr->sending = 0;
+        return;
+
+        sr->off = 0; sr->len = 0;
+        if (!sr->want) {
+            sr->sending = 0;
+            return;
+        }
+        sr->want = 0;
+#endif
+
+        sr->off = 0;
+        sr->len = 0;
+        sr->sending = 0;
+        return ;
+    }
+
+}
+
+void master_forward_to_slave(const char *data, unsigned len) {
+// static unsigned long long forwarded_total = 0;
+// static unsigned long long forwarded_events = 0;
+
+    // static unsigned long long fw_cnt = 0;
+    // fw_cnt++;
+    // if (fw_cnt <= 20)
+    //     fprintf(stderr, "[fwd] #%llu len=%u slave_fd=%d\n", fw_cnt, len, g_slave.fd);
+
+
+    if (g_slave.fd < 0 || data == NULL || len == 0) return;
+
+    if (len > 64 * 1024) {
+        fprintf(stderr, "[fwd] drop oversized event len=%u\n", len);
+        return;
+    }
+
+
+    g_slave_sr.fd = g_slave.fd;
+    void *p = realloc(g_slave_sr.buf, g_slave_sr.len + len);
+    if (p) {
+        g_slave_sr.buf = p;
+        memcpy(g_slave_sr.buf + g_slave_sr.len, data, len);
+        g_slave_sr.len += len;
+
+
+// forwarded_total += len;
+// forwarded_events++;
+
+// fprintf(stderr,
+//         "[FWD_TOTAL] events=%llu bytes=%llu\n",
+//         forwarded_events, forwarded_total);
+
+
+
+        g_slave_sr.want = 1;
+
+        if (!g_slave_sr.sending) {
+            g_slave_sr.sending = 1;
+            g_slave_sr.want = 0;
+            nty_coroutine *co;
+            nty_coroutine_create(&co, slave_send_func, NULL);
+
+            
+            // size_t off = 0;
+            // while (off < g_slave_sr.len) {
+
+            //     size_t chunk = g_slave_sr.len - g_slave_sr.off;
+            // if (chunk > 64 * 1024) chunk = 64 * 1024;
+            // ssize_t n = nty_send(g_slave_sr.fd, g_slave_sr.buf + g_slave_sr.off, chunk, 0);
+
+                // ssize_t n = nty_send(g_slave_sr.fd, g_slave_sr.buf + off, g_slave_sr.len - off, 0);
+
+                // if (n > 0) {
+                //     off += (size_t)n;
+                //     continue;
+                // }
+
+                // if (n < 0 && errno == EINTR) {
+                //     continue;
+                // }
+
+            // }
+        }
+    }else {
+        fprintf(stderr, "[fwd] realloc fail\n");
+        return;
+    }
+    
+    // fprintf(stderr, "[FWD] queue_len=%zu\n",
+    //     g_slave_sr.len);
+}
+
+
+
 void send_func(void *arg){
 
     send_resp_t *sr = arg;
 
     while(sr->off < sr->len){
-        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, sr->len - sr->off, 0);
+        size_t chunk = sr->len - sr->off;
+        if (chunk > 64 * 1024) chunk = 64 * 1024; 
+
+        ssize_t n = nty_send(sr->fd, sr->buf + sr->off, chunk, 0);
         if(n > 0) {sr->off += (size_t)n; continue;}
         if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
             continue;
         }
-        break;
+        sr->off = 0;
+        sr->len = 0;
+        sr->sending = 0;
+        if (sr->closed) { nty_close(sr->fd); free(sr->buf); free(sr); }
+        return;
+
+        sr->off = 0; sr->len = 0;
+
+        if (!sr->want) {
+            sr->sending = 0;
+            if (sr->closed) { nty_close(sr->fd); free(sr->buf); free(sr); }
+            return;
+        }
+        sr->want = 0;
     }
 
-    if(sr->off >= sr->len) {sr->off = 0; sr->len = 0;}
-    sr->sending = 0;
-
-    if (sr->closed && sr->len == 0) {
-        nty_close(sr->fd);
-        free(sr->buf);
-        free(sr);
-    }
+    
     // nty_send(send_resp[cli_fd]->fd, send_resp[cli_fd]->buf, send_resp[cli_fd]->len, 0);
 }
+
+
 
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
@@ -307,10 +466,10 @@ void read_func(void *arg){
         perror("read arg error");
         return ;
     }
-    char *buf = NULL; char *response = NULL; char *capbuf = NULL;
+    char *buf = NULL; char *response = NULL;
 
     size_t response_cap = 1024 * 1024;
-    size_t capbuf_cap   = 1024 * 1024;
+    // size_t capbuf_cap   = 1024 * 1024;
     // if(cfg.use_mempool == 1){
     //     buf = mp_alloc(pool, 64 * 1024);
     //     response = mp_alloc(pool, 1024 * 1024 * 1);
@@ -318,13 +477,13 @@ void read_func(void *arg){
     // }else {
         buf = calloc(1, 64 * 1024);
         response = calloc(1, response_cap);
-        capbuf = calloc(1, 1024 * 1024 * 1);
+        // capbuf = calloc(1, 1024 * 1024 * 1);
     // }
-    if (!buf || !response || !capbuf) {
+    if (!buf || !response) {
         if(cfg.use_mempool == 0){
             free(buf);
             free(response);
-            free(capbuf);
+            // free(capbuf);
         }
         kvs_conn_ctx_free(cli_fd);
         nty_close(cli_fd);
@@ -335,25 +494,32 @@ void read_func(void *arg){
     if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
     sr->fd = cli_fd;
 
-    send_resp_t *sr_slave = calloc(1, sizeof(send_resp_t));;
-    if(!sr_slave) { free(buf); free(response); nty_close(cli_fd); return; }
-    sr_slave->fd = g_slave.fd;
     while(1){
+
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
         if (recv_len <= 0) {
-            // fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
-            //         cli_fd, recv_len, errno, strerror(errno));
+            resp_capture_poll(0);
             break;
         }
 
-        resp_capture_reset();
-
         int length = kvs_protocol(cli_fd, buf, recv_len, &response, &response_cap);
-        int cap_len = 0;
+        resp_capture_poll(0);
+
+#if 0
         struct bpf_get_resp_info *info = resp_capture_read();
 
         static unsigned long long n = 0;
         if (info != NULL && info->len > 0) {
+            unsigned int ck = 0;
+    for (int i = 0; i < info->len; i++)
+        ck = ck * 31u + (unsigned char)capbuf[i];
+    static unsigned long long fwd_total = 0;
+    fwd_total += (unsigned long long)info->len;
+    n++;
+    fprintf(stderr, "[fwd] seq=%llu len=%d cum=%llu ck=%08x\n",
+            n, info->len, fwd_total, ck);
+
+
             int need = (int)info->len;
             if ((size_t)need > capbuf_cap) { 
                 char *p;
@@ -374,26 +540,35 @@ void read_func(void *arg){
 		    }
             cap_len = need;
 
-            memcpy(capbuf, info->resp_info, info->len); 
-            if(g_slave.fd >= 0){
-                
-                send_resp_append(sr_slave, capbuf, cap_len);
+            // memcpy(capbuf, info->resp_info, info->len); 
             
-                if(!sr_slave->sending){
-                    sr_slave->sending = 1;
-                    nty_coroutine *send_co;
-                    nty_coroutine_create(&send_co, send_func, sr_slave);
-                }
-            }  
-        }
-
+        // }
+#endif
         if(length > 0){
+#if 0
             send_resp_append(sr, response, length);
-            
+            sr->want = 1; 
+
             if(!sr->sending){
                 sr->sending = 1;
                 nty_coroutine *send_co;
                 nty_coroutine_create(&send_co, send_func, sr);
+            }
+#endif
+            size_t off = 0;
+            while (off < (size_t)length) {
+                ssize_t n = nty_send(cli_fd, response + off, (size_t)length - off, 0);
+
+                if (n > 0) {
+                    off += (size_t)n;
+                    continue;
+                }
+
+                if (n < 0 && errno == EINTR) {
+                    continue;
+                }
+
+                goto cleanup;
             }
         }
 
@@ -415,20 +590,15 @@ void read_func(void *arg){
         free(sr->buf);
         free(sr);
     }
-    sr_slave->closed = 1;
-    if (!sr_slave->sending) { 
-        free(sr_slave->buf);
-        free(sr_slave);
-    }
 
+
+cleanup:
     kvs_conn_ctx_free(cli_fd);
     nty_close(cli_fd);
-    malloc_trim(0); 
-    if(cfg.use_mempool == 0){
-        free(buf);    
-        free(response);
-        free(capbuf);
-    }
+    free(buf);
+    free(response);
+    free(arg);
+    return ;
 }
 
 void accept_func(void *arg){
@@ -497,6 +667,11 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     if(cfg.use_mempool == 1){
         pool = mp_create(64 * 1024);
     }
+    if (ringbuf_init() < 0) {
+        fprintf(stderr, "ringbuf_init failed\n");
+        return -1;
+    }
+
 
     nty_coroutine_create(&co, accept_func, p);
     nty_coroutine_create(&co, rdma_handshake, p);

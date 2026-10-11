@@ -1,32 +1,99 @@
 
 #include "../NtyCo/core/nty_coroutine.h"
-#include <netinet/in.h>
-
 #include "kvstore.h"
-#include <infiniband/verbs.h>
 #include "load_conf.h"
 #include "../src/rdma.h"
+
+
+
+#include <netinet/in.h>
+#include <infiniband/verbs.h>
 #include <sys/random.h>
 #include <arpa/inet.h>
 #include <endian.h> 
 #include <malloc.h>
+#include <limits.h>
 
-#define G_RMDA_BUF_SIZE 1024 * 1024 * 5
+#define SNAP_INIT_SIZE  (1024 * 1024) 
 
-extern int full_save_to_resp(char *msg, uint32_t length, char **response, size_t *res_size);
+static char   *g_snap_buf = NULL;
+static size_t  g_snap_cap = 0;
+static size_t  g_snap_len = 0;
 
 Config cfg;
 
 __g_rdma g_rdma_slave = {0};
 __g_slave g_s_slave = {0};
 
-uint32_t transfer_len = 0;
 
-char *res = NULL;
+
+
+#define KEY_VALUE_OFF   4
+static int kvs_apply_kv_chunk(const char *msg, uint32_t len)
+{
+    if (!msg) return -1;
+
+
+    if (g_snap_len + len > g_snap_cap) {
+        size_t newcap = g_snap_cap ? g_snap_cap : SNAP_INIT_SIZE;
+        while (newcap < g_snap_len + len) newcap *= 2;
+
+        void *p = realloc(g_snap_buf, newcap);
+        if (!p) { fprintf(stderr, "[snap] oom\n"); return -1; }
+        g_snap_buf = p;
+        g_snap_cap = newcap;
+    }
+    memcpy(g_snap_buf + g_snap_len, msg, len);
+    g_snap_len += len;
+
+
+    char *cname = "SET";
+    if (strncmp(cfg.storage_structure, "hash", 4) == 0)          cname = "HSET";
+    else if (strncmp(cfg.storage_structure, "skiplist", 8) == 0) cname = "SSET";
+
+    size_t i = 0;
+    int    loaded = 0;
+
+    while (g_snap_len - i >= KEY_VALUE_OFF) {
+        const char *p = g_snap_buf + i;
+
+        uint32_t k_len;
+        memcpy(&k_len, p, KEY_VALUE_OFF);
+        if (k_len == 0 || k_len > (uint32_t)INT_MAX) return -1;
+
+        size_t off = KEY_VALUE_OFF + k_len;
+        if (off > g_snap_len - i) break;
+
+        const char *key = p + KEY_VALUE_OFF;
+        if (g_snap_len - i - off < KEY_VALUE_OFF) break; 
+
+        uint32_t v_len;
+        memcpy(&v_len, key + k_len, KEY_VALUE_OFF);
+        if (v_len > (uint32_t)INT_MAX) return -1;
+
+        size_t total = off + KEY_VALUE_OFF + v_len;
+        if (total > g_snap_len - i) break; 
+
+        const char *value = key + k_len + KEY_VALUE_OFF;
+        kvs_txt_load(cname, (char *)key, (char *)value, k_len, v_len);
+
+        loaded++;
+        i += total;
+    }
+
+    if (i > 0) {
+        memmove(g_snap_buf, g_snap_buf + i, g_snap_len - i);
+        g_snap_len -= i;
+    }
+
+    return loaded;
+}
+
+
 void rdma_handshake(void *arg)
 {
     int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
-    // int fd = socket(AF_INET, SOCK_STREAM, 0);
+
     if(fd < 0){
         perror("nty socket error");
         return ;
@@ -50,6 +117,7 @@ void rdma_handshake(void *arg)
     union ibv_gid local_gid;
     if(ibv_query_gid(g_rdma_slave.ctx, 1, g_rdma_slave.gid_index, &local_gid) != 0){
         perror("ibv query gid error");
+        nty_close(fd);
         return ;
     }
 
@@ -59,7 +127,8 @@ void rdma_handshake(void *arg)
     local_psn &= 0xffffff;
 
     if (r_ret != sizeof(local_psn)) {
-        perror("getrandom error"); 
+        perror("getrandom error");
+        nty_close(fd); 
         return ;
     }
 
@@ -79,6 +148,7 @@ void rdma_handshake(void *arg)
 
     if(nty_send(fd, &local_info, sizeof(local_info), 0) != sizeof(local_info)){
         perror("nty send error");
+        nty_close(fd);
         return ;
     }
 
@@ -91,6 +161,7 @@ void rdma_handshake(void *arg)
     ssize_t nr = nty_recv(fd, &remote_info, sizeof(remote_info), 0);
     if(nr != sizeof(remote_info)){
         perror("rdma nty recv error");
+        nty_close(fd);
         return ;
     }
 
@@ -100,91 +171,82 @@ void rdma_handshake(void *arg)
 
     rdma_modify(g_rdma_slave.qp, local_psn, g_s_slave.remote_qpn, &g_s_slave.remote_gid, g_s_slave.remote_psn, g_rdma_slave.gid_index);
 
-    printf("master load finish\n");
+    printf("slave load finish\n");
+    
+    int total_loaded = 0;
+    int snap_failed  = 0;
 
-    uint32_t recv_len_net;
-    ssize_t mes_rv = nty_recv(fd, &recv_len_net, sizeof(recv_len_net),0);
-    if(mes_rv != sizeof(recv_len_net)){
-        perror("recv transfer length error");
-        close(fd);
-        return ;
-    }
-    transfer_len = ntohl(recv_len_net);
-
-    if(transfer_len != 0){
-        size_t response_size = 1024 * 1024 * 1;
-        size_t msg_size = 1024 * 1024 * 1;
-        char *resp_switch = calloc(1, msg_size);
-        char *resp_out    = calloc(1, response_size);
-
-        int length = full_save_to_resp(g_rdma_slave.buf, transfer_len, &resp_switch, &msg_size);
-
-        if(length > 0){
-            if(length > msg_size){
-                void *p = realloc(resp_switch, msg_size + length);
-                if(p){
-                    msg_size += length;
-                    resp_switch = p;
-                }else return ;
-            }
-            if(length > response_size){
-                void *p = realloc(resp_out, response_size + length);
-                if(p){
-                    response_size += length;
-                    resp_out = p;
-                }else return ;
-            }
-
-            
-            int recv_length = kvs_protocol(fd, resp_switch, length, &resp_out, &response_size);
-        }else{
-            kvs_protocol(fd, g_rdma_slave.buf, transfer_len, &resp_switch, &msg_size);
-        }
-        free(resp_switch); 
-        free(resp_out);
-    }
-    uint32_t ack = htonl(1);
-    nty_send(fd, &ack, sizeof(ack), 0);
-    size_t buf_size = 1024 * 1024 * 1; size_t res_size = 1024 * 1024 * 1;
-    char *cbuf = calloc(1, buf_size); char *cres = calloc(1, res_size);
-    if (!cbuf || !cres) {
-        free(cbuf); free(cres);
-        close(fd);
-        return ;
-    }
-
-
-    while (1) {
-        memset(cbuf, 0, buf_size); memset(cres, 0, res_size);
-
-        int n = nty_recv(fd, cbuf, buf_size, 0);  
-
-        if (n <= 0) {
-            // printf("[slave] master gone, n=%d\n", n);
+    for (;;) {
+        uint32_t len_net;
+        if (nty_recv(fd, &len_net, sizeof(len_net), 0) != (ssize_t)sizeof(len_net)) {
+            fprintf(stderr, "[snap] recv length fail\n");
+            snap_failed = 1;
             break;
         }
 
-        // if(n > buf_size){
-        //     void *p = realloc(cbuf, buf_size + n);
-        //     if(p){
-        //         buf_size += n;
-        //         cbuf = p;
-        //     }else return ;
-        // }
-        // if(n > res_size){
-        //     void *p = realloc(cres, res_size + n);
-        //     if(p){
-        //         res_size += n;
-        //         cres = p;
-        //     }else return ;
-        // }
-        int rlen = kvs_protocol(fd, cbuf, n, &cres, &res_size);
+        uint32_t chunk_len = ntohl(len_net);
+        if (chunk_len == 0) break;
+
+        if (chunk_len > g_rdma_slave.buf_size) {
+            fprintf(stderr, "[snap] chunk %u > rdma buf %zu\n",
+                    chunk_len, g_rdma_slave.buf_size);
+            snap_failed = 1;
+            break;
+        }
+
+        int n = kvs_apply_kv_chunk(g_rdma_slave.buf, chunk_len);
+        if (n < 0) { snap_failed = 1; break; }
+        total_loaded += n;
+
+        uint32_t ack = htonl(1);
+        if (nty_send(fd, &ack, sizeof(ack), 0) != (ssize_t)sizeof(ack)) {
+            fprintf(stderr, "[snap] send ack fail\n");
+            snap_failed = 1;
+            break;
+        }
+    }
+
+    if (snap_failed) {
+        fprintf(stderr, "[slave] snapshot aborted, closing\n");
+        nty_close(fd);
+        return;
+    }
+
+    if (g_snap_len != 0) {
+        fprintf(stderr, "[snap] stream tail not aligned: %zu bytes left\n", g_snap_len);
+        snap_failed = 1;
+    }
+
+    if (g_snap_buf && g_snap_cap > SNAP_INIT_SIZE) {
+        void *p = realloc(g_snap_buf, SNAP_INIT_SIZE);
+        if (p) { g_snap_buf = p; g_snap_cap = SNAP_INIT_SIZE; }
+    }
+
+    printf("[slave] snapshot loaded: %d records (failed=%d)\n", total_loaded, snap_failed);
+
+
+    uint32_t final_st = htonl(snap_failed ? 0 : 1);
+    if (nty_send(fd, &final_st, sizeof(final_st), 0) != (ssize_t)sizeof(final_st)) {
+        fprintf(stderr, "[snap] send final status fail\n");
+        nty_close(fd);
+        return;
+    }
+
+    size_t buf_size = 1024 * 1024 * 1;
+    size_t res_size = 1024 * 1024 * 1;
+    char  *cbuf = calloc(1, buf_size);
+    char  *cres = calloc(1, res_size);
+    if (!cbuf || !cres) { free(cbuf); free(cres); nty_close(fd); return; }
+
+    for (;;) {
+        int n = nty_recv(fd, cbuf, buf_size, 0);
+        if (n <= 0) break;
+        kvs_protocol(fd, cbuf, n, &cres, &res_size);
     }
 
     free(cbuf);
     free(cres);
-
-    return ;
+    return;
 }
 
 
@@ -222,13 +284,15 @@ void send_func(void *arg){
 
         ssize_t n = nty_send(sr->fd, sr->buf + sr->off, chunk, 0);
         if(n > 0) {sr->off += (size_t)n; continue;}
-        if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)){
             continue;
         }
         break;
     }
 
-    if(sr->off >= sr->len) {sr->off = 0; sr->len = 0;}
+    if(sr->off >= sr->len) {
+        sr->off = 0; sr->len = 0;
+    }
     sr->sending = 0;
 
     if (sr->closed && sr->len == 0) {
@@ -236,88 +300,27 @@ void send_func(void *arg){
         free(sr->buf);
         free(sr);
     }
-    // nty_send(send_resp[cli_fd]->fd, send_resp[cli_fd]->buf, send_resp[cli_fd]->len, 0);
-}
-
-#if 0
-void read_func(void *arg){
-
-    int cli_fd = *(int *)arg;
-    free(arg);
-
-    if(cli_fd < 0){
-        perror("read arg error");
-        return ;
-    }
-
-    char *buf = calloc(1, 1024 * 64);
-    char *resp = calloc(1, 1024 * 1024);
-    if (!buf || !resp) {
-        free(buf);
-        free(resp);
-        nty_close(cli_fd);
-        return;
-    }
     
-    send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
-    if(!sr) { free(buf); free(resp); nty_close(cli_fd); return; }
-    sr->fd = cli_fd;
-
-    while(1){
-
-        int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
-
-        if (recv_len == 0) break;
-        if (recv_len < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
-            fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
-                    cli_fd, recv_len, errno, strerror(errno));
-            break;
-        }
-        
-        int length = 0;
-
-        length = kvs_protocol_slave(buf, recv_len, resp);
-
-        if (length > 0) {
-
-            nty_coroutine *send_co;
-
-            send_resp_append(sr, resp, length);
-            
-            if(!sr->sending){
-                sr->sending = 1;
-                nty_coroutine *send_co;
-                nty_coroutine_create(&send_co, send_func, sr);
-            }
-        }
-
-        static uint64_t last_trim_ms = 0;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (now_ms - last_trim_ms >= 1000) {
-            last_trim_ms = now_ms;
-            malloc_trim(0);
-        }
-    }
-    sr->closed = 1;
-    if (!sr->sending) { 
-        nty_close(sr->fd);
-        free(sr->buf);
-        free(sr);
-    }
-
-    malloc_trim(0);
-    free(buf);    
-    free(resp);
 }
-#else 
+
+
+static uint64_t g_last_trim_ms = 0;
+static void trim_func(void){
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+
+    if (now - g_last_trim_ms >= 3000) {
+        g_last_trim_ms = now;
+        malloc_trim(0);
+    }
+}
+
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
-    if(cfg.use_mempool == 0){
-        free(arg);
-    }
+
+    free(arg);
 
     if(cli_fd < 0){
         perror("read arg error");
@@ -325,10 +328,11 @@ void read_func(void *arg){
     }
     const int ctx_fd = cli_fd;
 
-    char *buf = NULL; char *response = NULL; char *capbuf = NULL;
+    char *buf = NULL; 
+    char *response = NULL;
 
-    size_t response_cap = 1024 * 1024;
-    size_t capbuf_cap   = 1024 * 1024;
+    size_t response_cap = 1024 * 64;
+
     // if(cfg.use_mempool == 1){
     //     buf = mp_alloc(pool, 64 * 1024);
     //     response = mp_alloc(pool, 1024 * 1024 * 1);
@@ -336,61 +340,46 @@ void read_func(void *arg){
     // }else {
         buf = calloc(1, 64 * 1024);
         response = calloc(1, response_cap);
-        capbuf = calloc(1, 1024 * 1024 * 1);
+        // capbuf = calloc(1, 1024 * 1024 * 1);
     // }
-    if (!buf || !response || !capbuf) {
-        if(cfg.use_mempool == 0){
-            free(buf);
-            free(response);
-            free(capbuf);
-        }
-        kvs_conn_ctx_free(cli_fd);
+    if (!buf || !response) {
         nty_close(cli_fd);
-        return;
+        free(buf); free(response);
+        buf = NULL; response = NULL;
+        return ;
     }
 
-    send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
+    send_resp_t *sr = calloc(1, sizeof(send_resp_t));
     if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
     sr->fd = cli_fd;
 
 
-static unsigned long long slave_recv_total = 0;
-
     while(1){
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
 
-slave_recv_total += (unsigned long long)recv_len;
-
-
-if (recv_len > 0) {
-// fprintf(stderr,
-//         "[SLAVE_RECV_TOTAL] n=%d total=%llu\n",
-//          recv_len, slave_recv_total);
-
-        if (recv_len <= 0) {
-            // fprintf(stderr, "[read] fd=%d recv_len=%d errno=%d(%s)\n",
-            //         cli_fd, recv_len, errno, strerror(errno));
+        if (recv_len == 0) {
             break;
         }
-}
 
+        if (recv_len < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
 
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+
+            perror("nty_recv");
+            break;
+        }
 
         int length = kvs_protocol(cli_fd, buf, recv_len, &response, &response_cap);
-
-        int cap_len = 0;
         
-#if 1
+        if (length < 0) goto out;
+
         if(length > 0){
-#if 0
-            send_resp_append(sr, response, length);
-            
-            if(!sr->sending){
-                sr->sending = 1;
-                nty_coroutine *send_co;
-                nty_coroutine_create(&send_co, send_func, sr);
-            }
-#else 
+
             size_t off = 0;
             while (off < (size_t)length) {
                 ssize_t n = nty_send(cli_fd, response + off, (size_t)length - off, 0);
@@ -404,86 +393,34 @@ if (recv_len > 0) {
                     continue;
                 }
 
-                // 发送失败，退出连接处理循环
-                goto cleanup;
+                goto out;
 
             }
-#endif
-        }
-#else 
-if (length > 0) {
-    size_t off = 0;
 
-    while (off < (size_t)length) {
-        ssize_t n = nty_send(
-            cli_fd,
-            response + off,
-            (size_t)length - off,
-            0
-        );
-
-        if (n > 0) {
-            off += (size_t)n;
-            continue;
         }
 
-        if (n < 0 && errno == EINTR) {
-            continue;
-        }
-
-        fprintf(stderr,
-                "send failed: fd=%d n=%zd errno=%d (%s)\n",
-                cli_fd, n, errno, strerror(errno));
-        
-        
-        static uint64_t last_trim_ms = 0;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (now_ms - last_trim_ms >= 1000) {        
-            last_trim_ms = now_ms;
-            malloc_trim(0);
-        }
-
-
-        kvs_conn_ctx_free(cli_fd);
-        nty_close(cli_fd);
-
-        if (cfg.use_mempool == 0) {
-            free(buf);
-            free(response);
-        }
-        return;
+        trim_func();
     }
-}
-#endif
-        static uint64_t last_trim_ms = 0;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (now_ms - last_trim_ms >= 1000) {        
-            last_trim_ms = now_ms;
-            malloc_trim(0);
+ 
+out:
+    if (sr) {
+        sr->closed = 1;
+        if (!sr->sending) {
+            free(sr->buf); sr->buf = NULL;
+            free(sr);
         }
-        
-    }
-    sr->closed = 1;
-    if (!sr->sending) { 
-        nty_close(sr->fd);
-        free(sr->buf);
-        free(sr);
+        sr = NULL;
     }
 
-
-    cleanup:
     kvs_conn_ctx_free(cli_fd);
     nty_close(cli_fd);
-    free(buf);
-    free(response);
-    free(arg);
+
+    free(buf);      buf = NULL;
+    free(response); response = NULL;
     return ;
+
 }
-#endif
+
 
 void accept_func(void *arg){
 
@@ -495,8 +432,9 @@ void accept_func(void *arg){
         perror("nty_socket error");
         return ;
     }
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
@@ -530,9 +468,9 @@ void accept_func(void *arg){
             continue;
         }
 
-        int *arg = calloc(1, sizeof(int));
-        *arg = client_fd;
+        int *arg = malloc(sizeof(int));
         if (!arg) { nty_close(client_fd); continue; }
+        *arg = client_fd;
 
         int sndbuf = 8 * 1024 * 1024;
         int rcvbuf = 8 * 1024 * 1024;
@@ -540,7 +478,10 @@ void accept_func(void *arg){
         setsockopt(client_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
         nty_coroutine *read_co;
-        nty_coroutine_create(&read_co, read_func, arg);
+        if(nty_coroutine_create(&read_co, read_func, arg) != 0){
+            nty_close(client_fd);
+            free(arg);
+        }
     }
 }
 
@@ -554,12 +495,16 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     nty_coroutine *co = NULL;
     int *p = calloc(1, sizeof(int));
     *p = server_cfg->port;
+    int *p2 = calloc(1, sizeof(int));  
+    if(!p2){ return -1; } 
+    *p2 = cfg.port;
 
     g_rdma_slave = *g_m_rdma;
 
 
     nty_coroutine_create(&co, accept_func, p);
-    nty_coroutine_create(&co, rdma_handshake, p);
+    nty_coroutine_create(&co, rdma_handshake, p2);
+
     nty_schedule_run();
 
     return 0;

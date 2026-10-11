@@ -37,15 +37,17 @@ void cfg_init(void) {
 //Connection 
 // 'C' + 'o' + 'n'
 static int _hash(char *key, int key_len, int size) {
-    if (!key || key_len < 0 || size <= 0) return -1;
+    if (!key || key_len <= 0 || size <= 0) return -1;
 
-    unsigned int sum = 0;
+    unsigned int h = 2166136261u;
     for (int i = 0; i < key_len; i++) {
-        sum += (unsigned char)key[i];  
+        h ^= (unsigned char)key[i];
+        h *= 16777619u;
     }
-    return (int)(sum % size);
+    return (int)(h % (unsigned int)size);
 }
 
+#if 0
 static hashnode_t *_create_node(char *key, char *value, int key_len, int value_len) {
 
 	cfg_init();
@@ -80,11 +82,40 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 
 	return node;
 }
+#endif
+
+
+static hashnode_t *_create_node(char *key, char *value, int key_len, int value_len)
+{
+
+    size_t need = sizeof(hashnode_t) + (size_t)key_len + 1 + (size_t)value_len + 1;
+
+    hashnode_t *node = malloc(need);
+    if (!node) return NULL;
+
+    char *p = (char *)(node + 1);
+
+    node->key = p;
+    memcpy(p, key, key_len);
+    p[key_len] = '\0';
+    p += key_len + 1;
+
+    node->value = p;
+    memcpy(p, value, value_len);
+    p[value_len] = '\0';
+
+    node->key_len   = key_len;
+    node->value_len = value_len;
+    node->next      = NULL;
+
+    return node;
+}
+
+
 
 static void _free_node(hashnode_t *node) {
     if (!node) return;
-	free(node->key);
-	free(node->value);
+
 	free(node);
 }
 
@@ -140,38 +171,39 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 // mp
 int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len) {
 
-	if (!hash || !key || key_len < 0 || !value || value_len < 0) return -1;
+	if (!hash || !key || !value) return -1;
 
-	int idx = _hash(key, key_len, hash->max_slots);
-	if (idx < 0) return -1;
+    int idx = _hash(key, (int)key_len, hash->max_slots);
+    if (idx < 0) return -1;
 
-	hashnode_t *node = hash->nodes[idx];
+    hashnode_t *prev = NULL;
+    hashnode_t *node = hash->nodes[idx];
 
-	while (node != NULL) {
-		if (node->key_len == key_len && memcmp(node->key, key, key_len) == 0) {
-			char *new_value;
-			new_value = (char *)calloc(1, value_len + 1);
-			// char *new_value = (char *)m_malloc(value_len + 1);
-			if (!new_value) return -2;
+    while (node != NULL) {
+        if (node->key_len == (int)key_len && memcmp(node->key, key, key_len) == 0) {
 
-			free(node->value);
-			memcpy(new_value, value, value_len);
+            hashnode_t *nn = _create_node(key, value, (int)key_len, (int)value_len);
+            if (!nn) return -2;
 
-			node->value = new_value;
-			node->value_len = value_len;
-            return 1;  
+            nn->next = node->next;
+            if (prev) prev->next   = nn;
+            else      hash->nodes[idx] = nn;
+
+            _free_node(node);
+            return 1;
         }
+        prev = node;
         node = node->next;
-	}
+    }
 
-	hashnode_t *new_node = _create_node(key, value, key_len, value_len);
-	if (!new_node) return -1;
+    hashnode_t *new_node = _create_node(key, value, (int)key_len, (int)value_len);
+    if (!new_node) return -1;
 
-	new_node->next = hash->nodes[idx];
-	hash->nodes[idx] = new_node;
-	
-	hash->count ++;
-	return 0;
+    new_node->next   = hash->nodes[idx];
+    hash->nodes[idx] = new_node;
+    hash->count++;
+
+    return 0;
 }
 
 
@@ -240,51 +272,36 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len) {
 }
 
 int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len){
-    if (!hash || !key || key_len < 0 || !value || value_len < 0) return -2;
 
-    int idx = _hash(key, key_len, hash->max_slots);
+    if (!hash || !key || !value) return -2;
+
+    int idx = _hash(key, (int)key_len, hash->max_slots);
     if (idx < 0) return -2;
 
+    hashnode_t *prev = NULL;
     hashnode_t *node = hash->nodes[idx];
 
     while (node != NULL) {
-        if (node->key_len == key_len && memcmp(node->key, key, key_len) == 0) {
-            break;
-        }
+        if (node->key_len == (int)key_len && memcmp(node->key, key, key_len) == 0) break;
+        prev = node;
         node = node->next;
     }
 
-    if (!node) return 1; 
+    if (!node) return 1;
 
-	char *new_value;
-	new_value = (char *)calloc(1, value_len + 1);
-	// char *new_value = (char *)m_malloc(value_len + 1);
-    if (!new_value) return -2;
+    hashnode_t *nn = _create_node(key, value, (int)key_len, (int)value_len);
+    if (!nn) return -2;
 
-	free(node->value);
-    memcpy(new_value, value, value_len);
+    nn->next = node->next;
+    if (prev) prev->next       = nn;
+    else      hash->nodes[idx] = nn;
 
-    node->value = new_value;
-    node->value_len = value_len;
+    _free_node(node);
     return 0;
 }
 
 int kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len) {
 	return kvs_hash_get(hash, key, key_len, NULL) ? 0 : 1;
-}
-
-static int _serialize_size(kvs_hash_t *hash) {
-    if (!hash) return 0;
-    int total = sizeof(int); // count
-    for (int i = 0; i < hash->max_slots; i++) {
-        hashnode_t *node = hash->nodes[i];
-        while (node) {
-            total += sizeof(int) + node->key_len;
-            total += sizeof(int) + node->value_len;
-            node = node->next;
-        }
-    }
-    return total;
 }
 
 int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
@@ -302,16 +319,21 @@ int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
 			
 			size_t need = CRC_LEN + KEY_VALUE_OFF + node->key_len + KEY_VALUE_OFF + node->value_len;
 			if (p + need > end) {
-				size_t p_offset = p - *msg;
-				void *ptr = realloc(*msg, *length + need);
-				if(ptr){
-					*length += need;
-					*msg = ptr;
-					
-					payload = *msg + FULL_HDR_LEN;
-					p = *msg + p_offset;
-					end = *msg + *length;
-				}else return -1;
+				size_t used   = (size_t)(p - *msg);
+				size_t want   = used + need;
+				size_t newcap = (*length > 0) ? *length : 4096;
+
+				while (newcap < want) newcap += newcap / 2;
+
+				void *ptr = realloc(*msg, newcap);
+				if (!ptr) return -1;
+
+				*msg    = ptr;
+				*length = newcap;
+				payload = *msg + FULL_HDR_LEN;
+				p       = *msg + used;
+				end     = *msg + *length;
+				
             }
 		
 			uint32_t klen = node->key_len;

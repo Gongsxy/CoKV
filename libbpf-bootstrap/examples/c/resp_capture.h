@@ -4,6 +4,14 @@
 
 #define MAX_SIZE (64 * 1024)
 
+
+//  __u32 frame_id;
+//     __u32 off;
+//     __u32 len;
+//     __u32 total;
+//     char resp_info[MAX_SIZE];
+
+
 typedef struct bpf_get_resp_info{
     __u32 len;
     char resp_info[MAX_SIZE];

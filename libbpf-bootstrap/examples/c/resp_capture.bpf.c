@@ -72,18 +72,12 @@ int BPF_UPROBE(handle_kvs_protocol, void *a, char *msg, int length, void *b, voi
     if (r < 0) return 0;
 
 	resp_info *e = bpf_ringbuf_reserve(&resp_ringbuf, sizeof(resp_info), 0);
-	if(e == NULL) return 0;
+	if (e == NULL) {
+		bpf_printk("KVS DROP reserve fail len=%u\n", copy_len);
+		return 0;
+	}
 
 	e->len = (__u32)copy_len;
-
-#if 0
-	e->fd = (__u32)fd; e->len = (__u32)copy_len;
-
-	long ret = bpf_probe_read_user(e->resp_info, copy_len, msg);
-	if(ret < 0){bpf_ringbuf_discard(e, 0); return 0;}
-
-	bpf_ringbuf_submit(e, 0);
-#else 
 
 	long ret = bpf_probe_read_user(e->resp_info, copy_len, msg);
 	if(ret < 0){bpf_ringbuf_discard(e, 0); return 0;}
@@ -93,4 +87,3 @@ int BPF_UPROBE(handle_kvs_protocol, void *a, char *msg, int length, void *b, voi
 #endif
 	return 0;
 }
-#endif

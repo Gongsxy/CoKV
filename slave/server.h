@@ -6,7 +6,7 @@
 #define __SERVER_H__
 
 #define BUFFER_LENGTH		102400
-#define KVS_MAX_VALUE		(64 * 1024)
+
 
 typedef int (*RCALLBACK)(int fd);
 

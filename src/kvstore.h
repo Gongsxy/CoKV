@@ -250,8 +250,14 @@ int kvs_add_save(char *msg);
 int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
 static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char *msg);
 int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
-int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
+size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
 int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
+
+
+#define KVS_MAX_VALUE   (512u * 1024u * 1024u)              /* ÑÏ¸ñ 512 MiB */
+#define KVS_MAX_FRAME   (KVS_MAX_VALUE + 64u * 1024u)
+#define KVS_RET_DROP    -3
+#define KVS_MAX_FORWARD_QUEUE  (2u * KVS_MAX_FRAME + 64u * 1024u)
 
 #endif
 #endif

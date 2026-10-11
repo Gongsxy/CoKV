@@ -14,8 +14,8 @@
 #include <zlib.h>
 #include <malloc.h>
 #include <mcheck.h>
+#include <sys/uio.h>
 
-#define MAX_BUF_SIZE 1024 * 1024 * 10
 
 #if 1
 kvs_array_t *globle_array = NULL;
@@ -33,7 +33,6 @@ kvs_hash_t *globle_hash = NULL;
 kvs_skiplist_t *globle_skiplist = NULL;
 #endif
 
-char save_message[4096] = {0};
 
 const char *command[] = {
     "SET","GET","DEL","MOD","EXIST",
@@ -44,9 +43,6 @@ const char *command[] = {
     "CLEAR"
 };
 
-const char *key_value_command[] = {
-    "SET","MOD","RSET","RMOD","HSET","HMOD","SSET","SMOD"
-};
 
 enum {
     KVS_CMD_START = 0,
@@ -94,8 +90,7 @@ struct io_uring add_ring;
 struct io_uring full_ring;
 struct io_uring_params add_params;
 struct io_uring_params full_params;
-uring_info u_info[1024];
-uring_info u_full_info;
+
 
 
 static struct mp_pool *pool = NULL;
@@ -110,22 +105,8 @@ static int globle_add_fd = -1;
 static int globle_full_fd = -1;
 static int load_saved_msg = 1;
 
-const char *response[] = {
-
-};
-
-#define STATUS_IN	1
-#define STATUS_OUT	0
 
 #define MAC_LEN crypto_auth_hmacsha256_BYTES
-
-#define INIT STATUS_OUT;
-
-
-static char *mes = NULL;
-static char *sync_mes = NULL;
-static int   sync_mes_cap = 0;
-static int   sync_mes_len = 0;
 
 
 
@@ -195,12 +176,12 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                 // printf("NOT EXIST\r\n");
             }else{   
                 if(server_slave_cfg.show_response == 1){  
-                    if(*value_len > *resp_length){
-                        void *p = realloc(*response, *resp_length + *value_len + 2);
+                    if(*value_len + 64 > *resp_length){
+                        void *p = realloc(*response, *resp_length + *value_len + 64);
                         if(p == NULL){
                             return -1;
                         }
-                        *response = p; *resp_length += *value_len + 2; 
+                        *response = p; *resp_length += *value_len + 64; 
                     }
                     length  = sprintf(*response, "$%ld\r\n", *value_len);
                     memcpy(*response + length, result, *value_len);
@@ -304,10 +285,11 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
 // hash
 #if ENABLE_HASH
         case KVS_CMD_HSET:{
-            // if(*value_len > KVS_MAX_VALUE){
-            //     length = sprintf(*response, "-ERR value too large\r\n");
-            //     break;
-            // }
+            if (*value_len > KVS_MAX_VALUE) {
+                if(server_slave_cfg.show_response == 1)
+                    length = sprintf(*response, "-ERR value too large (max 512 MiB)\r\n");
+                break;
+            }
 
             int ret = kvs_hash_set(globle_hash,key,value, *key_len, *value_len);
             if(ret < 0){
@@ -323,12 +305,12 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                 if(server_slave_cfg.show_response == 1) length = sprintf(*response,"$-1\r\n");
             }else{
                 if(server_slave_cfg.show_response == 1){
-                    if(*value_len > *resp_length){
-                        void *p = realloc(*response, *resp_length + *value_len + 2);
+                    if(*value_len + 64 > *resp_length){
+                        void *p = realloc(*response, *resp_length + *value_len + 64);
                         if(p == NULL){
                             return -1;
                         }
-                        *response = p; *resp_length += *value_len + 2; 
+                        *response = p; *resp_length += *value_len + 64; 
                     }
                     length  = sprintf(*response, "$%ld\r\n", *value_len);
                     memcpy(*response + length, result, *value_len);
@@ -437,35 +419,20 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
             break;
         }
         case KVS_CMD_INFO:{
-            // int n = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
-            // length = sprintf(response, "+storage:%s count:%d hash:%p\r\n",
-            //                  server_cfg.storage_structure, n, (void *)globle_hash);
-            int n = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
-            int cap = 0, maxchain = 0, i;
-            unsigned long idx_bytes = 0;
-
-            if (globle_hash != NULL) {
-                cap = globle_hash->max_slots;
-                idx_bytes = (unsigned long)cap * sizeof(hashnode_t *);
-                for (i = 0; i < cap; i++) {
-                    int len = 0;
-                    hashnode_t *nd = globle_hash->nodes[i];
-                    while (nd) { len++; nd = nd->next; }
-                    if (len > maxchain) maxchain = len;
-                }
-            }
+            
+            int n   = (globle_hash != NULL) ? kvs_hash_count(globle_hash) : -1;
+            int cap = (globle_hash != NULL) ? globle_hash->max_slots  : 0;
+            unsigned long idx_bytes = (unsigned long)cap * sizeof(hashnode_t *);
 
             length = sprintf(*response,
-                "+storage:%s count:%d max_slots:%d avg_chain:%.2f max_chain:%d index_bytes:%lu\r\n",
+                "+storage:%s count:%d max_slots:%d avg_chain:%.2f index_bytes:%lu\r\n",
                 server_slave_cfg.storage_structure, n, cap,
-                (cap > 0) ? (double)n / cap : 0.0, maxchain, idx_bytes);
-            break;
+                (cap > 0) ? (double)n / cap : 0.0, idx_bytes);
             break;
         }
         case KVS_CMD_SAVE:{
             
             skip_add_log = 1;
-
             if(server_slave_cfg.full_save == 1){
                 int full_fd = get_full_fd();
                 if (full_fd < 0) {
@@ -474,11 +441,8 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                 }
                 char *tmp = NULL;
                 size_t tmp_size = 1024 * 1024 * 1;
-                if(server_slave_cfg.use_mempool == 1){
-                    tmp = mp_alloc(pool, tmp_size + MAC_LEN);
-                }else{
-                    tmp = calloc(1, tmp_size + MAC_LEN);
-                }
+                tmp = calloc(1, tmp_size + MAC_LEN);
+                
                 if (!tmp) {
                     length = sprintf(*response, "-ERR out of memory\r\n");
                     close(full_fd);
@@ -488,54 +452,57 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
 
                 uint32_t count = (uint32_t)kvs_hash_count(globle_hash);
 
-                int hash_length = kvs_hash_save(globle_hash, &tmp, &tmp_size, count);
+                size_t hash_length = kvs_hash_save(globle_hash, &tmp, &tmp_size, count);
 
-                if (hash_length <= 0) {
+                if (hash_length == 0) {
                     close(full_fd); globle_full_fd = -1;
-                    if(server_slave_cfg.use_mempool == 1){
-                        mp_large_free(pool, tmp);
-                    }else free(tmp);
+                    free(tmp);
                     length = sprintf(*response, "+OK\r\n");
                     break;
                 }
+
+                 
+                void *p = realloc(tmp, (size_t)hash_length + MAC_LEN);
+                if (p == NULL) { 
+                    close(full_fd);
+                    globle_full_fd = -1; 
+                     
+                    free(tmp);
+                    length = sprintf(*response, "-ERR out of memory\r\n");
+                    break;
+                }
+                tmp = p;
+                
+
 
                 if (crypto_auth_hmacsha256((unsigned char *)(tmp + hash_length),
                            (const unsigned char *)tmp, hash_length,
                            g_hmac_key) != 0) {
                     close(full_fd); globle_full_fd = -1; 
-                    if(server_slave_cfg.use_mempool == 1){
-                        mp_large_free(pool, tmp);
-                    }else free(tmp); 
+                    free(tmp); 
                     length = sprintf(*response,"-ERR hmac failed\r\n"); 
+                    break;
+                }
+
+                struct uring_info *full_info = calloc(1, sizeof(*full_info));
+                if(full_info == NULL){
+                    close(full_fd); globle_full_fd = -1;
+                    free(tmp);
+                    length = sprintf(*response, "-ERR out of memory\r\n");
                     break;
                 }
 
                 struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
                 if (!sqe_full) {
+
                     close(full_fd); globle_full_fd = -1;
-                    if(server_slave_cfg.use_mempool == 1){
-                        mp_large_free(pool, tmp);
-                    }else free(tmp);
+                    free(full_info);
+                    free(tmp);
                     length = sprintf(*response, "-ERR save busy\r\n");
                     break;
                 }
 
-                struct uring_info *full_info = NULL;
-                if(server_slave_cfg.use_mempool == 1){
-                    full_info = mp_alloc(pool, sizeof(*full_info));
-                    if(full_info) memset(full_info, 0, sizeof(*full_info));
-                }else{
-                    full_info = calloc(1, sizeof(*full_info));
-                }
 
-                if(full_info == NULL){
-                    close(full_fd); globle_full_fd = -1;
-                    if(server_slave_cfg.use_mempool == 1){
-                        mp_large_free(pool, tmp);
-                    }else free(tmp);
-                    length = sprintf(*response, "-ERR out of memory\r\n");
-                    break;
-                }
                 memset(full_info, 0, sizeof(*full_info));
                 full_info->save_buf_ptr = tmp;
                 full_info->fd = full_fd;
@@ -545,22 +512,9 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
 
                 int sub_ret = io_uring_submit(&full_ring);
                 if (sub_ret < 0) {
-                    if(server_slave_cfg.use_mempool == 1){
-                        mp_large_free(pool, full_info->save_buf_ptr);
-                        mp_large_free(pool, full_info);
-                    }else{
-                        if(server_slave_cfg.use_mempool == 1){
-                            mp_large_free(pool, tmp);
-                            mp_large_free(pool, full_info);
-                        }else{
-                            free(tmp);
-                            free(full_info);
-                        }
-                    }
                     close(full_fd); globle_full_fd = -1;
-
                     length = sprintf(*response, "-ERR submit failed\r\n");
-                    break;
+                    abort();
                 }
 
                 struct io_uring_cqe *cqe;
@@ -576,25 +530,14 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                     }
 
                     if (info) {
-                        // free(info->save_buf_ptr);
-                        if(server_slave_cfg.use_mempool == 1){
-                           mp_large_free(pool, info->save_buf_ptr); 
-                           mp_large_free(pool, info);
-                        }else {
-                            free(info->save_buf_ptr);
-                            free(info);
-                        }
+                        free(info->save_buf_ptr);
+                        free(info);
                     }
                     io_uring_cqe_seen(&full_ring, cqe);
                     close(full_fd); globle_full_fd = -1;
                 } else {
                     close(full_fd); globle_full_fd = -1;
-                    if (server_slave_cfg.use_mempool == 1) {
-                        mp_large_free(pool, tmp);
-                    } else {
-                        free(tmp);
-                        free(full_info);
-                    }
+                    abort();
                     length = sprintf(*response, "-ERR save failed\r\n");
                 }
 
@@ -688,11 +631,13 @@ int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size
             // if(server_cfg.use_mempool == 1){
             //     tokens[1] = mp_alloc(cmd_pool, *key_len + 1);
             // }else 
-        tokens[1] = malloc(*key_len + 1);
-        if(tokens[1] == NULL) { free(tokens[0]); tokens[0] = NULL; return -1; }
+        // tokens[1] = malloc(*key_len + 1);
+        // if(tokens[1] == NULL) { free(tokens[0]); tokens[0] = NULL; return -1; }
 
-        memcpy(tokens[1], p, *key_len);
-        tokens[1][*key_len] = '\0';
+        // memcpy(tokens[1], p, *key_len);
+        // tokens[1][*key_len] = '\0';
+
+        tokens[1] = p;
     }
 
     if(cmd_num == 2) return 0;
@@ -713,16 +658,16 @@ int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size
             // if(server_cfg.use_mempool == 1){
             //     tokens[2] = mp_alloc(cmd_pool, *value_len + 1);
             // }else 
-        tokens[2] = malloc(*value_len + 1);
-        if(tokens[2] == NULL) { 
-            free(tokens[0]); free(tokens[1]); 
-            tokens[0] = NULL; tokens[1] = NULL;
-            return -1; 
-        }
+        // tokens[2] = malloc(*value_len + 1);
+        // if(tokens[2] == NULL) { 
+        //     free(tokens[0]); free(tokens[1]); 
+        //     tokens[0] = NULL; tokens[1] = NULL;
+        //     return -1; 
+        // }
 
-        memcpy(tokens[2], p, *value_len);
-        tokens[2][*value_len] = '\0';
-
+        // memcpy(tokens[2], p, *value_len);
+        // tokens[2][*value_len] = '\0';
+        tokens[2] = p;
     }
     
     return 0;
@@ -795,7 +740,7 @@ int kvs_is_complete(char *msg, int length, size_t *off){
         }
 
         if(cmd_num == 3){ 
-
+            if (idx >= length) return -2;
             if(msg[idx] == '$'){
                 idx += 1;
                 while(idx < length && msg[idx] >= '0' && msg[idx] <= '9'){
@@ -821,51 +766,63 @@ typedef struct {
     int fd;
     char  *mes;
     size_t mes_len;
-    size_t mes_size;        
+    size_t mes_size; 
+    char  *resp;  
+    size_t resp_cap;       
 } kvs_conn_ctx_t;
 kvs_conn_ctx_t kvs_ctx[1024] = {0};
 
 void kvs_conn_ctx_free(int fd){
     if (fd < 0 || fd >= 1024) return;
 
-    if (kvs_ctx[fd].mes) {
-        free(kvs_ctx[fd].mes);
-        kvs_ctx[fd].mes = NULL;
-    }
-    kvs_ctx[fd].fd = -1; kvs_ctx[fd].mes_len = 0; kvs_ctx[fd].mes_size = 0;
+    free(kvs_ctx[fd].mes); kvs_ctx[fd].mes = NULL;
+    free(kvs_ctx[fd].resp); kvs_ctx[fd].resp = NULL;
+
+    kvs_ctx[fd].fd = -1; 
+    kvs_ctx[fd].mes_len = 0; 
+    kvs_ctx[fd].mes_size = 0;
+    kvs_ctx[fd].resp_cap = 0;
 }
+
+
+
+static void reap_add_completions(void)
+{
+    struct io_uring_cqe *cqe;
+
+    while (io_uring_peek_cqe(&add_ring, &cqe) == 0) {
+        uring_info *done = io_uring_cqe_get_data(cqe);
+
+        if (done != NULL) {
+            if (done->len > 0 && cqe->res != done->len) {
+                fprintf(stderr,
+                        "[aof] write result=%d expected=%d\n",
+                        cqe->res, done->len);
+            }
+
+            u_info_free(done);
+        }
+
+        io_uring_cqe_seen(&add_ring, cqe);
+    }
+}
+
 
 int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size){ 
 
-// static unsigned long long in_cnt = 0, in_total = 0;
-//     if (msg != NULL && length > 0) {
-//         in_cnt++; in_total += (unsigned long long)length;
-//         if (in_cnt <= 10 || (in_cnt % 50) == 0) {
-//             fprintf(stderr, "[slave-in] #%llu fd=%d len=%d total=%llu head=",
-//                     in_cnt, fd, length, in_total);
-//             for (int i = 0; i < 32 && i < length; i++)
-//                 fprintf(stderr, "%02x ", (unsigned char)msg[i]);
-//             fprintf(stderr, "\n");
-//         }
-//     }
-
-
-
-
-
     if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
 
     kvs_ctx[fd].fd = fd;
-    size_t key_len = 0; size_t value_len = 0;
-    size_t packet_len = 0;
+    size_t key_len = 0; size_t value_len = 0; size_t packet_len = 0;
 
     if (kvs_ctx[fd].mes == NULL) {
         // if(server_cfg.use_mempool == 1){
         //     mes = mp_alloc(pool, 1024 * 1024 * 5);
         //     if(mes) memset(mes, 0, 1024 * 1024 * 5);
         // }else 
-        kvs_ctx[fd].mes_size = 1024 * 1024 * 1;
-        kvs_ctx[fd].mes = calloc(1, kvs_ctx[fd].mes_size);
+        kvs_ctx[fd].mes_size = 1024 * 64;
+        kvs_ctx[fd].mes = malloc(kvs_ctx[fd].mes_size);
+        if (kvs_ctx[fd].mes == NULL) { kvs_ctx[fd].mes_size = 0; return -1; }
         kvs_ctx[fd].mes_len = 0;
     }
 
@@ -873,7 +830,12 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
     if(need > kvs_ctx[fd].mes_size){
         size_t new_size = kvs_ctx[fd].mes_size;
         while(need > new_size) {
-            new_size += 1024 * 1024;
+            if (new_size > SIZE_MAX / 2) {
+                new_size = need;
+                break;
+            }
+
+            new_size += new_size / 2;
         }
         void *ptr = realloc(kvs_ctx[fd].mes, new_size);
         if(ptr == NULL) {
@@ -883,11 +845,11 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
             kvs_ctx[fd].mes_len = 0;
             return *response ? elen : -1;
         }
-        kvs_ctx[fd].mes = ptr; kvs_ctx[fd].mes_size = new_size;
+        kvs_ctx[fd].mes = ptr; 
+        kvs_ctx[fd].mes_size = new_size;
     }
     memcpy(kvs_ctx[fd].mes + kvs_ctx[fd].mes_len, msg, length);
-
-    kvs_ctx[fd].mes_len += length;
+    kvs_ctx[fd].mes_len += (size_t)length;
 
     char *tokens[3] = {NULL, NULL, NULL};
 
@@ -901,33 +863,14 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
         if (ret < 0){
             if (ret == -2) break;
             else {
-
-// fprintf(stderr, "[slave-err] fd=%d mes_len=%zu head=",
-//                         fd, kvs_ctx[fd].mes_len);
-//                 for (size_t i = 0; i < 32 && i < kvs_ctx[fd].mes_len; i++)
-//                     fprintf(stderr, "%02x ", (unsigned char)kvs_ctx[fd].mes[i]);
-//                 fprintf(stderr, "\n");
-
-
-
-// fprintf(stderr, "[slave-err] PROTOCOL ERROR fd=%d 丢弃 %zu 字节\n",
-//                         fd, kvs_ctx[fd].mes_len);
-
-
-
                 kvs_ctx[fd].mes_len = 0;
-
-
-
-
-
                 const char *err = "-ERR protocol error\r\n";
                 int elen = (int)strlen(err);
                 if (response != NULL && *response) memcpy(*response, err, elen);
                 return elen;
             }
         }
-        if (ret > kvs_ctx[fd].mes_len){
+        if ((size_t)ret > kvs_ctx[fd].mes_len){
             const char *err = "-ERR over max range\r\n";
             int elen = (int)strlen(err);
             if(response != NULL && *response != NULL) memcpy(*response, err, elen);
@@ -937,349 +880,169 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
 
         packet_len = (size_t)ret;
 
-// static unsigned long long frames = 0;
-//             if (++frames <= 10 || (frames % 200) == 0)
-//                 fprintf(stderr, "[slave-frame] #%llu fd=%d packet=%zu left=%zu\n",
-//                         frames, fd, packet_len, kvs_ctx[fd].mes_len);
-
-
-
-
-
-        char *single_cmd = NULL;
-        single_cmd = malloc((size_t)packet_len + 1);
-        if(single_cmd == NULL) {
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL) memcpy(*response, err, elen);
-            kvs_ctx[fd].mes_len = 0;
-            return (response != NULL && *response != NULL) ? elen : -1;
-        }
-        memcpy(single_cmd, kvs_ctx[fd].mes, packet_len);
-        single_cmd[packet_len] = '\0';
-
-        uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);
-
         int resp_used = 0;
-        int count = kvs_split_token(single_cmd, tokens, packet_len, &key_len, &value_len, &resp_used);
+        int count = kvs_split_token(kvs_ctx[fd].mes, tokens, packet_len, &key_len, &value_len, &resp_used);
+
         if(count < 0){
             memmove(kvs_ctx[fd].mes, kvs_ctx[fd].mes + packet_len, kvs_ctx[fd].mes_len - packet_len);
             kvs_ctx[fd].mes_len -= packet_len;
 
-            free(single_cmd);
-            free(tokens[0]); free(tokens[1]); free(tokens[2]);
+            free(tokens[0]);
+            tokens[0] = tokens[1] = tokens[2] = NULL;
 
             const char *err = "-ERR split token error\r\n";
             int elen = (int)strlen(err);
             if(response != NULL && *response != NULL){
-                if(elen + total_response_len > *response_size){
-                    *response_size += 1024 * 1024;
-                    void *ptr = realloc(*response, *response_size);
+                size_t need_r = total_response_len + (size_t)elen;
+                if(need_r > *response_size){
+                    size_t newcap = (*response_size > 0) ? *response_size : 4096;
+                    while (newcap < need_r) newcap += newcap / 2 + 64;
+
+                    void *ptr = realloc(*response, newcap);
                     if(ptr == NULL) return -2;
                     *response = ptr;
+                    *response_size = newcap;
                 }
                 memcpy(*response + total_response_len, err, (size_t)elen);
-                total_response_len += (size_t)elen;
+                total_response_len = need_r;
             }
             break;
         } 
-
         
-        char *single_response = malloc((size_t)((size_t)packet_len + (size_t)value_len + 512));
-        size_t single_res_len = (size_t)packet_len + (size_t)value_len + 512;
-        if(single_response == NULL) {
-            free(single_cmd); 
-            free(tokens[0]); free(tokens[1]); free(tokens[2]);
-            tokens[0] = NULL; tokens[1] = NULL; tokens[2] = NULL;
+        int direct = (total_response_len == 0 && response != NULL && *response != NULL && *response_size >= 1024);
 
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL) memcpy(*response, err, elen);
-            kvs_ctx[fd].mes_len = 0;
-            single_res_len = 0;
-            return (response != NULL && *response != NULL) ? elen : -1;
-        }
-        single_response[0] = '\0';
-        resp_used = kvs_protocol_filter(tokens, &single_response, &single_res_len, &key_len, &value_len);
+        char  *resp_buf;
+        size_t resp_cap;
 
-        if(server_slave_cfg.add_save == 1) {
-            if(load_saved_msg == 1 && skip_add_log == 0){
-
-            int add_fd = get_add_fd();
-
-            uring_info *slot = u_info_alloc();                
-            if (!slot) {
-                io_uring_submit(&add_ring);                    
-                struct io_uring_cqe *cqe;
-                while (io_uring_peek_cqe(&add_ring, &cqe) == 0) {   
-                    struct uring_info *done = io_uring_cqe_get_data(cqe);
-                    if (done) {
-                        if (done->len > 0 && cqe->res != done->len)     
-                            fprintf(stderr, "[aof] write incomplete: res=%d expect=%d\n",
-                                    cqe->res, done->len);
-                        if (done->buffer) { free(done->buffer); done->buffer = NULL; }
-                        u_info_free(done);
-                    }
-                    io_uring_cqe_seen(&add_ring, cqe);
-                }
-                slot = u_info_alloc();
-            }
-
-            if (!slot) {
-                fprintf(stderr, "[aof] pool empty, drop this record\n");   
-            } else {
-                struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);    
-                if (!sqe) {
-                    u_info_free(slot);
-                    fprintf(stderr, "[aof] no sqe, drop this record\n");
-                } else {
-                    slot->fd  = add_fd;
-                    slot->len = packet_len + 4;
-                    slot->buffer = malloc(packet_len + 4);
-                    if (!slot->buffer) {
-                        u_info_free(slot);
-                    } else {
-                        memcpy(slot->buffer, &crc_ret, 4);
-                        memcpy(slot->buffer + 4, single_cmd, packet_len);
-                        io_uring_prep_write(sqe, add_fd, slot->buffer, packet_len + 4, 0);
-                        io_uring_sqe_set_data(sqe, slot);
-                        if (io_uring_submit(&add_ring) < 0) {              
-                            fprintf(stderr, "[aof] submit failed, drop\n");
-                            free(slot->buffer); slot->buffer = NULL;
-                            u_info_free(slot);
-                        }
-                    }
-                
-                    }
-                }
-            }
-        }
-
-        memmove(kvs_ctx[fd].mes, kvs_ctx[fd].mes + packet_len, kvs_ctx[fd].mes_len - packet_len);
-        kvs_ctx[fd].mes_len -= packet_len;
-
-        if (resp_used > 0) {
-            if(response != NULL && *response != NULL){
-                while(total_response_len + resp_used > *response_size){
-                    void *ptr = realloc(*response, *response_size + resp_used);
-                    if(ptr == NULL) {
-                        free(tokens[0]); free(tokens[1]); free(tokens[2]);
-                        free(single_cmd); free(single_response);
-                        return -2;
-                    }
-                    *response_size += resp_used;
-                    *response = ptr;
-                }
-                memcpy(*response + total_response_len, single_response, resp_used);
-            }
-            total_response_len += resp_used;
-        }else {
-            // fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
-            //         total_response_len, resp_used, BUFFER_LENGTH);
-        }
-
-        if (tokens[0]) {free(tokens[0]); tokens[0] = NULL;}
-        if (tokens[1]) {free(tokens[1]); tokens[1] = NULL;}
-        if (tokens[2]) {free(tokens[2]); tokens[2] = NULL;} 
-
-        free(single_cmd); free(single_response);
-    }
-
-    if (kvs_ctx[fd].mes_len == 0 && kvs_ctx[fd].mes_size > (16u << 20)) {
-        void *p = realloc(kvs_ctx[fd].mes, (8u << 20)); 
-        if (p) {                               
-            kvs_ctx[fd].mes = p;
-            kvs_ctx[fd].mes_size = (8u << 20);
-        }
-    }
-    return total_response_len; 
-}
-
-#if 1
-static char *mes_slave;
-static int mes_slave_len;
-static int mes_slave_size = 1024 * 1024 * 5;
-int kvs_protocol_slave(int fd, char *msg, int length, char **response, size_t *response_size){ 
-static unsigned long long in_cnt = 0, in_total = 0;
-    unsigned int ck = 0;
-    for (int i = 0; i < length; i++) ck = ck * 31u + (unsigned char)msg[i];
-    in_cnt++; in_total += (unsigned long long)length;
-    fprintf(stderr, "[slave-in] cnt=%llu len=%d cum=%llu ck=%08x\n",
-            in_cnt, length, in_total, ck);
-
-
+        if (direct) {
+            resp_buf = *response;
+            resp_cap = *response_size;
+            resp_buf[0] = '\0';
+        } else {
             
-    if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
-
-    kvs_ctx[fd].fd = fd;
-    size_t key_len = 0; size_t value_len = 0;
-    size_t packet_len = 0;
-
-    if (kvs_ctx[fd].mes == NULL) {
-        // if(server_cfg.use_mempool == 1){
-        //     mes = mp_alloc(pool, 1024 * 1024 * 5);
-        //     if(mes) memset(mes, 0, 1024 * 1024 * 5);
-        // }else 
-        kvs_ctx[fd].mes_size = 1024 * 1024 * 1;
-        kvs_ctx[fd].mes = calloc(1, kvs_ctx[fd].mes_size);
-        kvs_ctx[fd].mes_len = 0;
-    }
-
-    size_t need = (size_t)length + kvs_ctx[fd].mes_len;
-    if(need > kvs_ctx[fd].mes_size){
-        size_t new_size = kvs_ctx[fd].mes_size;
-        while(need > new_size) {
-            new_size += 1024 * 1024;
-        }
-        void *ptr = realloc(kvs_ctx[fd].mes, new_size);
-        if(ptr == NULL) {
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL) memcpy(*response, err, elen);
-            kvs_ctx[fd].mes_len = 0;
-            return *response ? elen : -1;
-        }
-        kvs_ctx[fd].mes = ptr; kvs_ctx[fd].mes_size = new_size;
-    }
-    memcpy(kvs_ctx[fd].mes + kvs_ctx[fd].mes_len, msg, length);
-
-    kvs_ctx[fd].mes_len += length;
-
-    char *tokens[3] = {NULL, NULL, NULL};
-
-    size_t total_response_len = 0;
-
-    while (kvs_ctx[fd].mes_len > 0) {
-        size_t off = 0;
-        key_len = 0; value_len = 0;
-        int ret = kvs_is_complete(kvs_ctx[fd].mes, kvs_ctx[fd].mes_len, &off);
-        if (ret == 0) break; 
-        if (ret < 0){
-            if (ret == -2) break;
-            else {
-                kvs_ctx[fd].mes_len = 0;
-                const char *err = "-ERR protocol error\r\n";
-                int elen = (int)strlen(err);
-                if (response != NULL && *response) memcpy(*response, err, elen);
-                return elen;
-            }
-        }
-        if (ret > kvs_ctx[fd].mes_len){
-            const char *err = "-ERR over max range\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL) memcpy(*response, err, elen);
-            kvs_ctx[fd].mes_len = 0;
-            return *response ? elen : -1;
-        }
-
-        packet_len = (size_t)ret;
-
-        char *single_cmd = NULL;
-        single_cmd = malloc((size_t)packet_len + 1);
-        if(single_cmd == NULL) {
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL) memcpy(*response, err, elen);
-            kvs_ctx[fd].mes_len = 0;
-            return (response != NULL && *response != NULL) ? elen : -1;
-        }
-        memcpy(single_cmd, kvs_ctx[fd].mes, packet_len);
-        single_cmd[packet_len] = '\0';
-
-        uint32_t crc_ret = (uint32_t)crc32(0L, single_cmd, packet_len);
-
-        int resp_used = 0;
-        int count = kvs_split_token(single_cmd, tokens, packet_len, &key_len, &value_len, &resp_used);
-        if(count < 0){
-            memmove(kvs_ctx[fd].mes, kvs_ctx[fd].mes + packet_len, kvs_ctx[fd].mes_len - packet_len);
-            kvs_ctx[fd].mes_len -= packet_len;
-
-            free(single_cmd);
-            free(tokens[0]); free(tokens[1]); free(tokens[2]);
-
-            const char *err = "-ERR split token error\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL){
-                if(elen + total_response_len > *response_size){
-                    *response_size += 1024 * 1024;
-                    void *ptr = realloc(*response, *response_size);
-                    if(ptr == NULL) return -2;
-                    *response = ptr;
+            if (kvs_ctx[fd].resp == NULL) {
+                kvs_ctx[fd].resp_cap = 1024;
+                kvs_ctx[fd].resp = malloc(kvs_ctx[fd].resp_cap);
+                if (kvs_ctx[fd].resp == NULL) {
+                    free(tokens[0]);
+                    tokens[0] = tokens[1] = tokens[2] = NULL;
+                    return -2;
                 }
-                memcpy(*response + total_response_len, err, (size_t)elen);
-                total_response_len += (size_t)elen;
             }
-            break;
-        } 
-
-        
-        char *single_response = malloc((size_t)((size_t)packet_len + (size_t)value_len + 512));
-        size_t single_res_len = (size_t)packet_len + (size_t)value_len + 512;
-        if(single_response == NULL) {
-            free(single_cmd); 
-            free(tokens[0]); free(tokens[1]); free(tokens[2]);
-            tokens[0] = NULL; tokens[1] = NULL; tokens[2] = NULL;
-
-            const char *err = "-ERR frame too large\r\n";
-            int elen = (int)strlen(err);
-            if(response != NULL && *response != NULL) memcpy(*response, err, elen);
-            kvs_ctx[fd].mes_len = 0;
-            single_res_len = 0;
-            return (response != NULL && *response != NULL) ? elen : -1;
+            kvs_ctx[fd].resp[0] = '\0';
+            resp_buf = kvs_ctx[fd].resp;
+            resp_cap = kvs_ctx[fd].resp_cap;
         }
-        single_response[0] = '\0';
-        resp_used = kvs_protocol_filter(tokens, &single_response, &single_res_len, &key_len, &value_len);
+        resp_used = kvs_protocol_filter(tokens, &resp_buf, &resp_cap, &key_len, &value_len);
+
+
+        if (direct) {
+            *response = resp_buf;
+            *response_size = resp_cap;
+        } else {
+            kvs_ctx[fd].resp = resp_buf;
+            kvs_ctx[fd].resp_cap = resp_cap;
+        }
+    
+
+#define AOF_BIG_THRESHOLD   (1024 * 1024)
 
         if(server_slave_cfg.add_save == 1) {
+            reap_add_completions();
+
             if(load_saved_msg == 1 && skip_add_log == 0){
 
-            int add_fd = get_add_fd();
+                int add_fd = get_add_fd();
 
-            uring_info *slot = u_info_alloc();                
-            if (!slot) {
-                io_uring_submit(&add_ring);                    
-                struct io_uring_cqe *cqe;
-                while (io_uring_peek_cqe(&add_ring, &cqe) == 0) {   
-                    struct uring_info *done = io_uring_cqe_get_data(cqe);
-                    if (done) {
-                        if (done->len > 0 && cqe->res != done->len)     
-                            fprintf(stderr, "[aof] write incomplete: res=%d expect=%d\n",
-                                    cqe->res, done->len);
-                        if (done->buffer) { free(done->buffer); done->buffer = NULL; }
-                        u_info_free(done);
+                
+
+                if ((size_t)packet_len + 4 > AOF_BIG_THRESHOLD){
+                    uint32_t crc_ret = (uint32_t)crc32(0L, (const Bytef *)kvs_ctx[fd].mes,
+                                                       (uInt)packet_len);
+
+                    struct iovec iov[2];
+                    iov[0].iov_base = &crc_ret;
+                    iov[0].iov_len = 4;
+                    iov[1].iov_base = kvs_ctx[fd].mes;
+                    iov[1].iov_len = packet_len;
+
+                    struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);
+                    if (!sqe) {
+                        io_uring_submit(&add_ring);
+                        sqe = io_uring_get_sqe(&add_ring);                       
                     }
-                    io_uring_cqe_seen(&add_ring, cqe);
-                }
-                slot = u_info_alloc();
-            }
 
-            if (!slot) {
-                fprintf(stderr, "[aof] pool empty, drop this record\n");   
-            } else {
-                struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);    
-                if (!sqe) {
-                    u_info_free(slot);
-                    fprintf(stderr, "[aof] no sqe, drop this record\n");
-                } else {
-                    slot->fd  = add_fd;
-                    slot->len = packet_len + 4;
-                    slot->buffer = malloc(packet_len + 4);
-                    if (!slot->buffer) {
-                        u_info_free(slot);
+                    if(!sqe){
+                        fprintf(stderr, "[aof] big: no sqe, drop\n");
+                        abort();
+                    }
+
+                    io_uring_prep_writev(sqe, add_fd, iov, 2, 0);
+                    io_uring_sqe_set_data(sqe, NULL);
+
+                    if (io_uring_submit(&add_ring) < 0) {
+                        fprintf(stderr, "[aof] big: submit fail\n");
+                        abort();
                     } else {
-                        memcpy(slot->buffer, &crc_ret, 4);
-                        memcpy(slot->buffer + 4, single_cmd, packet_len);
-                        io_uring_prep_write(sqe, add_fd, slot->buffer, packet_len + 4, 0);
-                        io_uring_sqe_set_data(sqe, slot);
-                        if (io_uring_submit(&add_ring) < 0) {              
-                            fprintf(stderr, "[aof] submit failed, drop\n");
-                            free(slot->buffer); slot->buffer = NULL;
+                        int retry = 0;
+                        for (;;) {
+                            struct io_uring_cqe *cqe = NULL;
+                            if (io_uring_wait_cqe(&add_ring, &cqe) < 0){
+                                if (++retry > 100) {
+                                    fprintf(stderr, "[aof] big: wait_cqe error, close AOF\n");
+                                    abort(); 
+                                }
+                                continue;
+                            }
+                            retry = 0;
+
+                            void *d = io_uring_cqe_get_data(cqe);
+                            if (d == NULL) {
+                                if (cqe->res != (int)(packet_len + 4))
+                                    fprintf(stderr, "[aof] big write res=%d expect=%zu\n",
+                                                cqe->res, packet_len + 4);
+                                io_uring_cqe_seen(&add_ring, cqe);
+                                break;
+                            }
+                            u_info_free((uring_info *)d);
+                            io_uring_cqe_seen(&add_ring, cqe);
+                        }   
+                    }
+                }else{
+                    uring_info *slot = u_info_alloc();  
+
+                    if (!slot) {
+                        fprintf(stderr, "[aof] pool empty, drop this record\n");   
+                    } else {
+                        slot->buffer = malloc((size_t)packet_len + 4);
+                        if (!slot->buffer) {
                             u_info_free(slot);
+                        } else {
+                            uint32_t crc_ret = (uint32_t)crc32(
+                                    0L, (const Bytef *)kvs_ctx[fd].mes, (uInt)packet_len);
+                            slot->fd  = add_fd;
+                            slot->len = (int)packet_len + 4;
+                            memcpy(slot->buffer, &crc_ret, 4);
+                            memcpy(slot->buffer + 4, kvs_ctx[fd].mes, packet_len);
+                            
+                            struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);    
+                            if (!sqe) {
+                                free(slot->buffer); slot->buffer = NULL;
+                                u_info_free(slot);
+                                fprintf(stderr, "[aof] no sqe, drop this record\n");
+                            }else{
+                                io_uring_prep_write(sqe, add_fd, slot->buffer, packet_len + 4, 0);
+                                io_uring_sqe_set_data(sqe, slot);
+                                if (io_uring_submit(&add_ring) < 0) {              
+                                    fprintf(stderr, "[aof] submit failed, drop\n");
+                                    abort();
+                                }
+                            
+                            }
                         }
                     }
-                
-                    }
                 }
+                
             }
         }
 
@@ -1287,42 +1050,43 @@ static unsigned long long in_cnt = 0, in_total = 0;
         kvs_ctx[fd].mes_len -= packet_len;
 
         if (resp_used > 0) {
-            if(response != NULL && *response != NULL){
-                while(total_response_len + resp_used > *response_size){
-                    void *ptr = realloc(*response, *response_size + resp_used);
-                    if(ptr == NULL) {
-                        free(tokens[0]); free(tokens[1]); free(tokens[2]);
-                        free(single_cmd); free(single_response);
+            if(!direct && response != NULL && *response != NULL){
+                size_t need_r = total_response_len + (size_t)resp_used;
+                if (need_r > *response_size) {
+
+                size_t newcap = (*response_size > 0) ? *response_size : 4096;
+                    while (newcap < need_r) newcap += newcap / 2 + 64;
+                    void *ptr = realloc(*response, newcap);
+                    if (ptr == NULL) {
+                        free(tokens[0]);
                         return -2;
                     }
-                    *response_size += resp_used;
-                    *response = ptr;
+                    *response = ptr; *response_size = newcap;
                 }
-                memcpy(*response + total_response_len, single_response, resp_used);
+                memcpy(*response + total_response_len, kvs_ctx[fd].resp, (size_t)resp_used);
             }
-            total_response_len += resp_used;
-        }else {
+            total_response_len += (size_t)resp_used;
+        }
             // fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
             //         total_response_len, resp_used, BUFFER_LENGTH);
-        }
 
-        if (tokens[0]) {free(tokens[0]); tokens[0] = NULL;}
-        if (tokens[1]) {free(tokens[1]); tokens[1] = NULL;}
-        if (tokens[2]) {free(tokens[2]); tokens[2] = NULL;} 
-
-        free(single_cmd); free(single_response);
+        free(tokens[0]);
+        tokens[0] = tokens[1] = tokens[2] = NULL;
     }
 
-    if (kvs_ctx[fd].mes_len == 0 && kvs_ctx[fd].mes_size > (16u << 20)) {
-        void *p = realloc(kvs_ctx[fd].mes, (8u << 20)); 
-        if (p) {                               
-            kvs_ctx[fd].mes = p;
-            kvs_ctx[fd].mes_size = (8u << 20);
-        }
+    if (kvs_ctx[fd].mes_len == 0 && kvs_ctx[fd].mes_size > 64 * 1024) {
+        void *p = realloc(kvs_ctx[fd].mes, 64 * 1024);
+        if (p) { kvs_ctx[fd].mes = p; kvs_ctx[fd].mes_size = 64 * 1024; }
     }
-    return total_response_len; 
+
+    if (kvs_ctx[fd].resp != NULL && kvs_ctx[fd].resp_cap > 64 * 1024) {
+        void *p = realloc(kvs_ctx[fd].resp, 1024);
+        if (p) { kvs_ctx[fd].resp = p; kvs_ctx[fd].resp_cap = 1024; }
+    }
+
+    return (int)total_response_len;
 }
-#endif
+
 
 int init_kvs(void){
     if(strcmp(server_slave_cfg.storage_structure, "array") == 0){
@@ -1366,9 +1130,7 @@ void dest_kvs(void){
 }
 
 
-// ok
-int origin_size = 0;
-static char *old_mes = NULL;
+
 
 // ok
 void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len){
@@ -1498,6 +1260,7 @@ void kvs_add_read(char *cmd, char *key, char *value){
     // fprintf(stderr, "[load] aof replay: ok=%d bad=%d, consumed %zu / %zu bytes\n",
     //         ok, bad, (size_t)(p - addr), len);
     kvs_conn_ctx_free(fd);
+    free(replay_response);
     load_saved_msg = 1;
     munmap(addr, len);
     close(fd);
@@ -1559,7 +1322,9 @@ void kvs_full_read(char *cmd, char *key, char *value) {
 
     if (sodium_memcmp(mac_calc, addr + mac_off, MAC_LEN) != 0) {
         fprintf(stderr, "[load] MAC mismatch: file forged or key wrong\n");
-        goto out;                    /* 拒绝整份，保持当前数据不变 */
+        munmap(addr, len);
+        close(fd);
+        return ;                    
     }
     
     uint32_t crc_exp, count_hdr, pack_len;
@@ -1603,27 +1368,42 @@ void kvs_full_read(char *cmd, char *key, char *value) {
 
         uint32_t klen; uint32_t vlen;
         memcpy(&klen, p, 4);
-        if (klen == 0 || klen >= sizeof(s_key) || (size_t)(end - p) < (size_t)4 + klen + 4 + 4) {
+        if (klen == 0 || (size_t)(end - p) < (size_t)4 + klen + 4 + 4) {
             fprintf(stderr, "[load] bad klen=%u at %zu, stop\n", klen, (size_t)(p - addr));
             goto out;
         }
-        memcpy(s_key, p + 4, klen);
+        // memcpy(s_key, p + 4, klen);
 
         memcpy(&vlen, p + 4 + klen, 4);
-        if (vlen >= sizeof(s_value) || p + 4 + klen + 4 + vlen > end) {
-            fprintf(stderr, "[load] bad vlen=%u at %zu, stop\n", vlen, (size_t)(p - addr));
+
+        size_t rec_len = (size_t)4 + klen + 4 + (size_t)vlen;
+        if ((size_t)(end - p) < rec_len) {
+            fprintf(stderr, "[load] truncated record klen=%u vlen=%u at %zu, stop\n",
+                    klen, vlen, (size_t)(p - addr));
             goto out;
         }
-        memcpy(s_value, p + 4 + klen + 4, vlen);
-        
-        s_key[klen] = '\0';
-        s_value[vlen] = '\0';
+
 
         uint32_t crc_single_real = crc32(0L, p, (uInt)(p + 4 + klen + 4 + vlen - p));
         
-        if(crc_single_exp != crc_single_real){ printf("single crc check not match\n"); bad++; goto out;}
+        if(crc_single_exp != crc_single_real){ 
+            printf("single crc check not match\n"); 
+            bad++; 
+            goto out;
+        }
         
-        kvs_txt_load(cname, s_key, s_value, klen, vlen);
+        if (strncmp(server_slave_cfg.storage_structure, "hash", 4) == 0) {
+            if (kvs_hash_set(globle_hash, (char *)(p + 4), (char *)(p + 4 + klen + 4), klen, vlen) < 0) {
+                fprintf(stderr, "[load] insert failed at %zu\n", (size_t)(p - addr));
+                goto out;
+            }
+        } else {
+            memcpy(s_key, p + 4, klen);
+            memcpy(s_value, p + 4 + klen + 4, vlen);
+            s_key[klen] = '\0';
+            s_value[vlen] = '\0';
+            kvs_txt_load(cname, s_key, s_value, klen, vlen);
+        }
         loaded++;
 
         p += 4 + klen + 4 + vlen;
@@ -1631,15 +1411,19 @@ void kvs_full_read(char *cmd, char *key, char *value) {
     // fprintf(stderr, "[load] full snapshot: loaded=%u bad=%u (header count=%u)\n",
     //         loaded, bad, count_hdr);
 
-    if (loaded != count_hdr) fprintf(stderr, "[load] count mismatch: loaded=%u header=%u\n", loaded, count_hdr);
 out:
     munmap(addr, len);
     close(fd);
+
+    if (loaded != count_hdr) {
+        fprintf(stderr, "[load] count mismatch: loaded=%u header=%u\n", loaded, count_hdr);
+        abort(); 
+    }
+
+    return ;
 }
 
-static int add_save_flag = 0;
-static pthread_t add_pid;
-static pthread_t full_pid;
+
 
 static int load_hmac_key(void){
     int fd = open("config/hmac.key", O_RDONLY | __O_CLOEXEC| __O_NOFOLLOW);
@@ -1649,9 +1433,9 @@ static int load_hmac_key(void){
     return (n == (ssize_t)sizeof g_hmac_key) ? 0 : -1;
 }
 
-static void mtrace_exit(int s){ (void)s; muntrace(); _exit(0); }
 
 static int g_add_ring_ok  = 0;
+static int g_full_ring_ok = 0;
 int main(int argc, char const *argv[]){
 
     // mtrace();
@@ -1679,7 +1463,7 @@ int main(int argc, char const *argv[]){
     if (full_ok < 0) fprintf(stderr, "[init] full_ring init error: %s\n", strerror(-full_ok));
 
     g_add_ring_ok  = (add_ok  == 0);
-    // g_full_ring_ok = (full_ok == 0);
+    g_full_ring_ok = (full_ok == 0);
 
     if(server_slave_cfg.use_mempool == 1){
         pool = mp_create(1024 * 1024 * 1);

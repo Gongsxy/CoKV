@@ -126,7 +126,6 @@ int proactor_start(unsigned short port, msg_handle handle);
 int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma);
 
 
-
 int kvs_array_create(kvs_array_t *inst);
 int kvs_array_destory(kvs_array_t *inst);
 char * kvs_array_get(kvs_array_t *inst, char *key);
@@ -233,18 +232,13 @@ int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key);
 #define FULLSTORAGE     0
 #define ADDSTORAGE      1
 
-// int kvs_txt_write(const char *filename, char* key, char* value);
-// int kvs_txt_del(const char *filename, char* key);
-// int kvs_txt_exist(const char *filename, char* key);
-// int kvs_txt_mod(const char *filename, char* key, char* value);
-
-// int kvs_txt_write(char *cmd, char* key, char* value, int *key_len, int *value_len);
 int kvs_txt_write(char *cmd, char* key, char* value, int *key_len, int *value_len);
 int kvs_txt_del(char *cmd, char* key, int *key_len);
 int kvs_txt_exist(char *cmd, char* key, int *key_len);
 int kvs_txt_mod(char *cmd, char* key, char* value, int *key_len, int *value_len);
 char * kvs_txt_get(char *cmd, char* key, int *key_len);
 
+void kvs_txt_read(char *cmd, char *key, char *value);
 void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len);
 void kvs_txt_full_load(char *msg);
 int kvs_add_save(char *msg);
@@ -253,12 +247,16 @@ int kvs_add_save(char *msg);
 
 #endif
 
-
 int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
 static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char *msg);
 int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
-int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
+size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
 int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
+
+
+#define KVS_MAX_VALUE   (512u * 1024u * 1024u)              /* ÑÏ¸ñ 512 MiB */
+#define KVS_MAX_FRAME   (KVS_MAX_VALUE + 64u * 1024u)
+#define KVS_RET_DROP    -3
 
 
 #endif

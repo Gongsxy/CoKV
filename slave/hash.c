@@ -304,8 +304,8 @@ int kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len) {
 	return kvs_hash_get(hash, key, key_len, NULL) ? 0 : 1;
 }
 
-int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
-    if (!hash || !msg ) return -1;
+size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
+    if (!hash || !msg ) return 0;
 
 	char *payload = *msg + FULL_HDR_LEN;
 	char *p = payload;
@@ -326,7 +326,7 @@ int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
 				while (newcap < want) newcap += newcap / 2;
 
 				void *ptr = realloc(*msg, newcap);
-				if (!ptr) return -1;
+				if (!ptr) return 0;
 
 				*msg    = ptr;
 				*length = newcap;
@@ -365,7 +365,7 @@ int kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count){
 	memcpy(*msg, &crc_total, CRC_LEN);
 
 
-    return (int)(FULL_HDR_LEN + pack_len);
+    return (size_t)(FULL_HDR_LEN + pack_len);
 }
 
 int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){

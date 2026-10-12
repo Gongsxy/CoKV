@@ -96,7 +96,7 @@ int ringbuf_init(void){
         goto fail;
     }
 
-	fprintf(stderr, "[size] userspace sizeof(resp_info)=%zu\n", sizeof(resp_info));
+	// fprintf(stderr, "[size] userspace sizeof(resp_info)=%zu\n", sizeof(resp_info));
 
 	return 0;
 fail:

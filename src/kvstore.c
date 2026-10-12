@@ -1037,7 +1037,7 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
                     uring_info *slot = u_info_alloc();  
 
                     if (!slot) {
-                        fprintf(stderr, "[aof] pool empty, drop this record\n");   
+                        // fprintf(stderr, "[aof] pool empty, drop this record\n");   
                     } else {
                         slot->buffer = malloc((size_t)packet_len + 4);
                         if (!slot->buffer) {

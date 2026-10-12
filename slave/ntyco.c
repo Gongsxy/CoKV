@@ -222,7 +222,7 @@ void rdma_handshake(void *arg)
         if (p) { g_snap_buf = p; g_snap_cap = SNAP_INIT_SIZE; }
     }
 
-    printf("[slave] snapshot loaded: %d records (failed=%d)\n", total_loaded, snap_failed);
+    printf("slave snapshot loaded: %d records (failed=%d)\n", total_loaded, snap_failed);
 
 
     uint32_t final_st = htonl(snap_failed ? 0 : 1);

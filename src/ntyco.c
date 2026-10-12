@@ -276,7 +276,7 @@ void rdma_handshake(void *arg){
         return;
     }
 
-    printf("[master] snapshot=%d bytes, chunk_max=%zu\n", sync_ret, g_rdma.buf_size);
+    printf("master snapshot=%d bytes", sync_ret);
 
 
     int push_ret = rdma_push_stream(mes, (uint32_t)sync_ret);
@@ -292,7 +292,7 @@ void rdma_handshake(void *arg){
         return;
     }
 
-    printf("[master] snapshot pushed ok\n");
+    printf("master snapshot pushed ok\n");
 
     nty_close(listen_fd);
     return;
@@ -306,23 +306,9 @@ typedef struct {
     size_t off;        /* 已发出偏移 */
     int    sending;    /* 是否已有发送协程在跑（保证同一时刻只有一个写者） */
     int    closed;     /* 读端已结束 */
-    int    want;       /* ★ 新增：队列里又追加了新数据，写者协程别退出 */
+    int    want;       /* 队列里又追加了新数据，写者协程别退出 */
     size_t cap;
 } send_resp_t;
-
-// static int send_resp_append(send_resp_t *s, char *msg, int length){
-
-//     if(s == NULL || msg == NULL || length == 0) return -1;
-
-//     void *p = realloc(s->buf, s->len + length);
-//     if(p == NULL) return -2;
-//     s->buf = p;
-
-//     memcpy(s->buf + s->len, msg, length);
-//     s->len += length;
-
-//     return 0;
-// }
 
 
 static send_resp_t g_slave_sr = { .fd = -1, .sending = 0 };

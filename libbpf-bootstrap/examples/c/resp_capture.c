@@ -57,77 +57,10 @@ void cap_lost_info(void *ctx, int cpu, __u64 cnt){
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
-	// return 0;
-	return vfprintf(stderr, format, args);
-}
-
-#if 0
-int resp_capture(void)
-{
-	libbpf_set_print(libbpf_print_fn);
-
-	int err;
-
-	/* Set up libbpf errors and debug info callback */
-	libbpf_set_print(libbpf_print_fn);
-
-	/* Open BPF application */
-	skel = resp_capture_bpf__open_and_load();
-	if (!skel) {
-		fprintf(stderr, "Failed to open BPF skeleton\n");
-		return 1;
-	}
-
-
-	/* Attach tracepoint handler */
-	err = resp_capture_bpf__attach(skel);
-	if (err) {
-		fprintf(stderr, "Failed to attach BPF skeleton\n");
-		goto cleanup;
-	}
-
-	g_map_fd = bpf_map__fd(skel->maps.resp_cap);
-
-
-
 	return 0;
-cleanup:
-	if (pb) { perf_buffer__free(pb); pb = NULL; }
-    if (skel) { resp_capture_bpf__destroy(skel); skel = NULL; }
-    return err ? err : -1; 
+	// return vfprintf(stderr, format, args);
 }
 
-void resp_capture_reset(void)
-{
-    static struct bpf_get_resp_info empty;
-    __u32 zero = 0;
-
-    if (g_map_fd < 0) return;
-    int ret = bpf_map_update_elem(g_map_fd, &zero, &empty, BPF_ANY);
-
-    if (ret < 0) {
-        perror("bpf_map_update_elem");
-    }
-}
-
-struct bpf_get_resp_info *resp_capture_read(void){
-
-	static struct bpf_get_resp_info tmp;
-	__u32 zero = 0;
-	
-	if (g_map_fd < 0) return NULL;
-
-	int ret = bpf_map_lookup_elem(g_map_fd, &zero, &tmp);
-    if (ret < 0) {
-        perror("bpf_map_lookup_elem");
-        return NULL;
-    }
-
-	if(tmp.len == 0) return NULL;
-
-    return &tmp;
-}
-#endif
 
 static struct ring_buffer *g_rb = NULL;
 

@@ -27,6 +27,7 @@ static void *s_storage;
 
 __g_rdma g_rdma = {0};
 __g_slave g_slave = {.fd = -1};
+__g_slave g_s_slave = {0};
 
 #if 1
 int load_save_mes(){
@@ -169,6 +170,7 @@ int rdma_send_mes_to_slave(uint32_t length){
     return 0;
 }
 
+#if 0
 void rdma_handshake(void *arg){
     int listen_fd = nty_socket(AF_INET, SOCK_STREAM, 0);
     if(listen_fd < 0){
@@ -297,7 +299,172 @@ void rdma_handshake(void *arg){
     nty_close(listen_fd);
     return;
 }
+#else 
+void rdma_handshake(void *arg){
 
+
+    int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
+
+    if(fd < 0){
+        perror("nty socket error");
+        return ;
+    }
+
+    int reuse = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(9998);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    inet_pton(AF_INET, cfg.sync_ip, &addr.sin_addr);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("nty_connect"); nty_close(fd); return;
+    }
+
+
+    g_slave.fd = fd;
+
+    int   rc  = -1;
+    char *mes = NULL;
+
+    g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
+
+    union ibv_gid local_gid;
+    if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
+        perror("ibv query gid error"); goto out;
+    }
+
+    uint32_t local_psn;
+    if(getrandom(&local_psn, sizeof(local_psn), 0) != sizeof(local_psn)){
+        perror("getrandom error"); goto out;
+    }
+    local_psn &= 0xffffff;
+
+
+    struct { uint32_t qpn; uint32_t psn; union ibv_gid gid; }
+        __attribute__((packed)) local_short;
+    local_short.gid = local_gid;
+    local_short.psn = htonl(local_psn);
+    local_short.qpn = htonl(g_rdma.qp->qp_num);
+
+    if(nty_send(fd, &local_short, sizeof(local_short), 0) != (ssize_t)sizeof(local_short)){
+        perror("nty send error"); goto out;
+    }
+
+    struct { uint32_t qpn; uint32_t psn; uint32_t rkey;
+             uint64_t vaddr; union ibv_gid gid; }
+        __attribute__((packed)) remote_full;
+
+    if(nty_recv(fd, &remote_full, sizeof(remote_full), 0) != (ssize_t)sizeof(remote_full)){
+        perror("rdma nty recv error"); goto out;
+    }
+
+    g_slave.remote_qpn   = ntohl(remote_full.qpn);
+    g_slave.remote_psn   = ntohl(remote_full.psn);
+    g_slave.remote_rkey  = ntohl(remote_full.rkey);
+    g_slave.remote_vaddr = be64toh(remote_full.vaddr);
+    g_slave.remote_gid   = remote_full.gid;
+
+    if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn,
+                   &g_slave.remote_gid, g_slave.remote_psn,
+                   g_rdma.gid_index) != 0){
+        fprintf(stderr, "modify fail\n"); goto out;
+    }
+
+    printf("master load finish\n");
+
+    rc = 0; 
+    
+out:
+    free(mes);
+    if(rc < 0){
+        if(g_slave.fd >= 0) nty_close(g_slave.fd);
+        g_slave.fd = -1;
+    }
+
+}
+
+// int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
+
+//     if(fd < 0){
+//         perror("nty socket error");
+//         return ;
+//     }
+
+//     int reuse = 1;
+//     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+//     struct sockaddr_in addr;
+//     addr.sin_family = AF_INET;
+//     addr.sin_port = htons(9998);
+//     addr.sin_addr.s_addr = INADDR_ANY;
+//     inet_pton(AF_INET, cfg.ip, &addr.sin_addr);
+
+//     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+//         perror("nty_connect"); nty_close(fd); return;
+//     }
+
+//     g_rdma_slave.gid_index = pick_rocev2_gid_index(g_rdma_slave.ctx, 1);
+
+//     union ibv_gid local_gid;
+//     if(ibv_query_gid(g_rdma_slave.ctx, 1, g_rdma_slave.gid_index, &local_gid) != 0){
+//         perror("ibv query gid error");
+//         nty_close(fd);
+//         return ;
+//     }
+
+
+//     uint32_t local_psn;
+//     ssize_t r_ret = getrandom(&local_psn, sizeof(local_psn), 0);
+//     local_psn &= 0xffffff;
+
+//     if (r_ret != sizeof(local_psn)) {
+//         perror("getrandom error");
+//         nty_close(fd); 
+//         return ;
+//     }
+
+//     struct {
+//         uint32_t qpn;
+//         uint32_t psn;
+//         uint32_t rkey;
+//         uint64_t vaddr;
+//         union ibv_gid gid;
+//     }__attribute__((packed)) local_info;
+
+//     local_info.gid = local_gid;
+//     local_info.psn = htonl(local_psn);
+//     local_info.qpn = htonl(g_rdma_slave.qp->qp_num);
+//     local_info.rkey = htonl(g_rdma_slave.mr->rkey);
+//     local_info.vaddr = htobe64((uint64_t)g_rdma_slave.buf);
+
+//     if(nty_send(fd, &local_info, sizeof(local_info), 0) != sizeof(local_info)){
+//         perror("nty send error");
+//         nty_close(fd);
+//         return ;
+//     }
+
+//     struct {
+//         uint32_t qpn;
+//         uint32_t psn;
+//         union ibv_gid gid;
+//     }__attribute__((packed)) remote_info;
+
+//     ssize_t nr = nty_recv(fd, &remote_info, sizeof(remote_info), 0);
+//     if(nr != sizeof(remote_info)){
+//         perror("rdma nty recv error");
+//         nty_close(fd);
+//         return ;
+//     }
+
+//     g_s_slave.remote_gid = remote_info.gid;
+//     g_s_slave.remote_psn = ntohl(remote_info.psn);
+//     g_s_slave.remote_qpn = ntohl(remote_info.qpn);
+
+//     rdma_modify(g_rdma_slave.qp, local_psn, g_s_slave.remote_qpn, &g_s_slave.remote_gid, g_s_slave.remote_psn, g_rdma_slave.gid_index);
+#endif
 
 typedef struct {
     int    fd;

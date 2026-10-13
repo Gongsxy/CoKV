@@ -10,6 +10,7 @@
 #include "kvstore.h"
 #include "load_conf.h"
 #include "mem_pool.h"
+#include "uring_slot.h"
 
 
 typedef struct hashtable_s kvs_hash_t;
@@ -368,12 +369,13 @@ size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t coun
     return (size_t)(FULL_HDR_LEN + pack_len);
 }
 
+
 int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
     if (!hash || !msg ) return -1;
 
 	char *p = *msg;
 	char *end = *msg + *length;
-
+	
     int i = 0;
     for(i = 0; i < hash->max_slots; i++){
 
@@ -383,14 +385,16 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
 			size_t need = KEY_VALUE_OFF + node->key_len + KEY_VALUE_OFF + node->value_len;
 			if (p + need > end) {
 				size_t p_offset = p - *msg;
-				void *ptr = realloc(*msg, *length + need);
-				if(ptr){
-					*length += need;
-					*msg = ptr;
+                size_t want = p_offset + need;
+                size_t newcap = *length ? *length : (1024 * 1024);
+                while (newcap < want) newcap += newcap / 2; 
 
-					p = *msg + p_offset;
-					end = *msg + *length;
-				}else return -1;
+				void *ptr = realloc(*msg, newcap);
+                if (!ptr) return -1;
+				*msg    = ptr;
+				*length = newcap;
+				p       = *msg + p_offset;
+				end     = *msg + *length;
             }
 		
 			uint32_t klen = node->key_len;
@@ -406,8 +410,23 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
 
     }
 
-	uint32_t pack_len = (uint32_t)(p - *msg);  
+	size_t snap_len = (size_t)(p - *msg); 
 
+	int fd = open("config/save_mes.tmp", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));   /* бя */
+    }else {
+        size_t w = 0;
+        while (w < snap_len) {
+            ssize_t n = write(fd, *msg + w, snap_len - w);
+            if (n < 0) { if (errno == EINTR) continue; perror("write tmp"); break; }
+            if (n == 0) { fprintf(stderr, "[sync] write tmp: 0 bytes\n"); break; }
+            w += (size_t)n;
+        }
+        fsync(fd);
+        close(fd);
+    }
 
-    return (int)(pack_len);
+    return (int)(snap_len);
+
 }

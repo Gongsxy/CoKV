@@ -414,7 +414,8 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
 
 	int fd = open("config/save_mes.tmp", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) {
-        fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));   /* бя */
+        fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));
+        return -1;
     }else {
         size_t w = 0;
         while (w < snap_len) {

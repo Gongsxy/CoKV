@@ -3,7 +3,11 @@
 #include <sys/random.h>
 #include <malloc.h>
 #include <fcntl.h>
-
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h> 
+#include <string.h> 
 
 #include "kvstore.h"
 #include "rdma.h"
@@ -70,13 +74,48 @@ extern int resp_capture_poll(int max_records);
 void master_forward_to_slave(const char *data, unsigned len);
 int rdma_send_mes_to_slave(uint32_t length);
 
-static int rdma_push_stream(const char *stream, uint32_t total)
+static int rdma_push_stream(uint32_t total)
 {
-    uint32_t chunk_max = (uint32_t)g_rdma.buf_size;  
-    uint32_t off       = 0;
 
+    uint32_t chunk_max = (uint32_t)g_rdma.buf_size;
     if (chunk_max == 0) { fprintf(stderr, "[push] rdma buf_size == 0\n"); return -1; }
     if (g_slave.fd < 0) { fprintf(stderr, "[push] no slave conn\n");       return -1; }
+
+    void *map = MAP_FAILED;
+    uint32_t off = 0;
+    int rc = -1;
+    struct ibv_mr *mr = NULL;
+
+    if (total == 0) {// ¿Õ¿â·¢½áÊøÐÅºÅ
+        if (rdma_notify_slave(&g_slave, 0) < 0) return -1;
+        uint32_t st0;
+        if (nty_recv(g_slave.fd, &st0, sizeof(st0), 0) != (ssize_t)sizeof(st0)) return -1;
+        return (ntohl(st0) == 1) ? 0 : -1;
+    }
+
+
+    int tmp_fd = open("config/save_mes.tmp", O_RDONLY);
+    if (tmp_fd < 0) {
+        fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));
+        return -1;
+    }
+    struct stat tmp_st;
+    if(fstat(tmp_fd, &tmp_st) != 0){
+        fprintf(stderr, "open tmp failed\n");
+        close(tmp_fd); 
+        return -1;
+    }
+
+    if ((uint32_t)tmp_st.st_size != total) {
+        fprintf(stderr, "[push] size mismatch: file=%ld total=%u\n", (long)tmp_st.st_size, total);
+        goto out;
+    }
+
+    map = mmap(NULL, tmp_st.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, tmp_fd, 0);
+    if (map == MAP_FAILED) { perror("mmap"); goto out; }
+
+    close(tmp_fd); tmp_fd = -1;
+
 
     for (;;) {
         uint32_t chunk = total - off;
@@ -84,29 +123,62 @@ static int rdma_push_stream(const char *stream, uint32_t total)
         if (chunk == 0) { 
             if (rdma_notify_slave(&g_slave, 0) < 0) {
                 fprintf(stderr, "[push] notify(0) fail\n");
-                return -1;
+                goto out;
             }
             break;
         }
 
         if (chunk > chunk_max) chunk = chunk_max;
 
-        memcpy(g_rdma.buf, stream + off, chunk);
-
-        if (rdma_send_mes_to_slave(chunk) < 0) {
-            fprintf(stderr, "[push] write fail off=%u len=%u\n", off, chunk);
-            return -1;
+        mr = ibv_reg_mr(g_rdma.pd, (char *)map + off, chunk, 0);
+        if (!mr) {
+            fprintf(stderr, "[push] reg_mr(off=%u len=%u) fail: %s\n",
+                    off, chunk, strerror(errno));
+            goto out;
         }
+
+        struct ibv_sge sge = {
+            .addr = (uint64_t)((char *)map + off),
+            .length = chunk,
+            .lkey = mr->lkey,
+        };
+        
+        struct ibv_send_wr wr = {0};
+        wr.wr_id = 1;
+        wr.opcode = IBV_WR_RDMA_WRITE;
+        wr.send_flags = IBV_SEND_SIGNALED;
+        wr.num_sge = 1;
+        wr.sg_list = &sge;
+        wr.wr.rdma.remote_addr = g_slave.remote_vaddr;
+        wr.wr.rdma.rkey = g_slave.remote_rkey;
+
+        struct ibv_send_wr *bad_wr = NULL;
+        if(ibv_post_send(g_rdma.qp, &wr, &bad_wr) != 0){
+            perror("ibv post send error");
+            goto out;
+        }
+
+        struct ibv_wc wc = {0};
+        int n = 0;
+        while((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0){
+        };
+        if(n < 0 || wc.status != IBV_WC_SUCCESS){
+            fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
+            goto out;
+        }
+
+        ibv_dereg_mr(mr);
+        mr = NULL;
 
         if (rdma_notify_slave(&g_slave, chunk) < 0) {
             fprintf(stderr, "[push] notify fail len=%u\n", chunk);
-            return -1;
+            goto out;
         }
 
         uint32_t ack;                                       
         if (nty_recv(g_slave.fd, &ack, sizeof(ack), 0) != (ssize_t)sizeof(ack)) {
             fprintf(stderr, "[push] wait ack fail off=%u\n", off);
-            return -1;
+            goto out;
         }
 
         off += chunk;
@@ -115,10 +187,16 @@ static int rdma_push_stream(const char *stream, uint32_t total)
     uint32_t st;                                            
     if (nty_recv(g_slave.fd, &st, sizeof(st), 0) != (ssize_t)sizeof(st)) {
         fprintf(stderr, "[push] read final status fail\n");
-        return -1;
+        goto out;
     }
 
-    return (ntohl(st) == 1) ? 0 : -1;
+    rc = (ntohl(st) == 1) ? 0 : -1;
+
+out:
+    if (mr) ibv_dereg_mr(mr);
+    if (map != MAP_FAILED) munmap(map, total);
+    if (tmp_fd >= 0) close(tmp_fd);
+    return rc;
 }
 
 
@@ -126,49 +204,50 @@ static int rdma_push_stream(const char *stream, uint32_t total)
 static int sync_mes_to_rdma(char **msg, size_t *size){
     
     int ret = kvs_hash_save_slave(globle_hash, msg, size);
+
     if(ret < 0) return -1;
 
     return ret;
 }
 
-int rdma_send_mes_to_slave(uint32_t length){
+// int rdma_send_mes_to_slave(uint32_t length){
 
-    if(g_slave.fd < 0){
-        perror("tcp connection error");
-        return -1;
-    }
-    struct ibv_sge sge = {
-        .addr = (uint64_t)g_rdma.buf,
-        .length = length,
-        .lkey = g_rdma.mr->lkey,
-    };
+//     if(g_slave.fd < 0){
+//         perror("tcp connection error");
+//         return -1;
+//     }
+//     struct ibv_sge sge = {
+//         .addr = (uint64_t)g_rdma.buf,
+//         .length = length,
+//         .lkey = g_rdma.mr->lkey,
+//     };
     
-    struct ibv_send_wr wr = {0};
-    wr.wr_id = 1;
-    wr.opcode = IBV_WR_RDMA_WRITE;
-    wr.send_flags = IBV_SEND_SIGNALED;
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-    wr.wr.rdma.remote_addr = g_slave.remote_vaddr;
-    wr.wr.rdma.rkey = g_slave.remote_rkey;
+//     struct ibv_send_wr wr = {0};
+//     wr.wr_id = 1;
+//     wr.opcode = IBV_WR_RDMA_WRITE;
+//     wr.send_flags = IBV_SEND_SIGNALED;
+//     wr.num_sge = 1;
+//     wr.sg_list = &sge;
+//     wr.wr.rdma.remote_addr = g_slave.remote_vaddr;
+//     wr.wr.rdma.rkey = g_slave.remote_rkey;
 
-    struct ibv_send_wr *bad_wr = NULL;
-    if(ibv_post_send(g_rdma.qp, &wr, &bad_wr) != 0){
-        perror("ibv post send error");
-        return -1;
-    }
+//     struct ibv_send_wr *bad_wr = NULL;
+//     if(ibv_post_send(g_rdma.qp, &wr, &bad_wr) != 0){
+//         perror("ibv post send error");
+//         return -1;
+//     }
 
-    struct ibv_wc wc = {0};
-    int n = 0;
-    while((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0){
-    };
-    if(n < 0 || wc.status != IBV_WC_SUCCESS){
-        fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
-        return -1;
-    }
+//     struct ibv_wc wc = {0};
+//     int n = 0;
+//     while((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0){
+//     };
+//     if(n < 0 || wc.status != IBV_WC_SUCCESS){
+//         fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
+//         return -1;
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
 #if 0
 void rdma_handshake(void *arg){
@@ -302,88 +381,117 @@ void rdma_handshake(void *arg){
 #else 
 void rdma_handshake(void *arg){
 
+    for(;;){
+        int    rc       = -1;
+        char  *mes      = NULL;
+        size_t mes_size = 0;
+        int    sync_ret = 0;
 
-    int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
+        int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
 
-    if(fd < 0){
-        perror("nty socket error");
-        return ;
-    }
+        if(fd < 0){
+            perror("nty socket error");
+            nty_coroutine_sleep(1000);
+            continue;
+        }
 
-    int reuse = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(9998);
+        addr.sin_addr.s_addr = INADDR_ANY;
 
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(9998);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    inet_pton(AF_INET, cfg.sync_ip, &addr.sin_addr);
+        if(inet_pton(AF_INET, cfg.sync_ip, &addr.sin_addr) != 1){
+            fprintf(stderr, "[rdma] cfg.sync_ip not IPv4\n");
+            nty_close(fd);
+            return ;
+        }
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("nty_connect"); nty_close(fd); return;
-    }
+        int connected = 0;
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            nty_close(fd);
+            usleep(1000);
+            continue;
+        }
+
+        fprintf(stderr, "[rdma] connected to %s:9998 fd=%d\n", cfg.sync_ip, fd);
+        g_slave.fd = fd;
+
+        g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
+
+        union ibv_gid local_gid;
+        if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
+            perror("ibv query gid error"); goto out;
+        }
+
+        uint32_t local_psn;
+        if(getrandom(&local_psn, sizeof(local_psn), 0) != sizeof(local_psn)){
+            perror("getrandom error"); goto out;
+        }
+        local_psn &= 0xffffff;
 
 
-    g_slave.fd = fd;
+        struct { uint32_t qpn; uint32_t psn; union ibv_gid gid; }
+            __attribute__((packed)) local_short;
+        local_short.gid = local_gid;
+        local_short.psn = htonl(local_psn);
+        local_short.qpn = htonl(g_rdma.qp->qp_num);
 
-    int   rc  = -1;
-    char *mes = NULL;
+        if(nty_send(fd, &local_short, sizeof(local_short), 0) != (ssize_t)sizeof(local_short)){
+            perror("nty send error"); goto out;
+        }
 
-    g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
+        struct { uint32_t qpn; uint32_t psn; uint32_t rkey;
+                uint64_t vaddr; union ibv_gid gid; }
+            __attribute__((packed)) remote_full;
 
-    union ibv_gid local_gid;
-    if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
-        perror("ibv query gid error"); goto out;
-    }
+        if(nty_recv(fd, &remote_full, sizeof(remote_full), 0) != (ssize_t)sizeof(remote_full)){
+            perror("rdma nty recv error"); goto out;
+        }
 
-    uint32_t local_psn;
-    if(getrandom(&local_psn, sizeof(local_psn), 0) != sizeof(local_psn)){
-        perror("getrandom error"); goto out;
-    }
-    local_psn &= 0xffffff;
+        g_slave.remote_qpn   = ntohl(remote_full.qpn);
+        g_slave.remote_psn   = ntohl(remote_full.psn);
+        g_slave.remote_rkey  = ntohl(remote_full.rkey);
+        g_slave.remote_vaddr = be64toh(remote_full.vaddr);
+        g_slave.remote_gid   = remote_full.gid;
+
+        if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn,
+                    &g_slave.remote_gid, g_slave.remote_psn,
+                    g_rdma.gid_index) != 0){
+            fprintf(stderr, "modify fail\n"); goto out;
+        }
+
+        printf("master load finish\n");
+
+        mes_size = 1024 * 1024;
+        mes = malloc(mes_size);
+        if(!mes){ perror("mes malloc"); goto out; }
+
+        sync_ret = sync_mes_to_rdma(&mes, &mes_size);
+        if(sync_ret < 0){ fprintf(stderr, "sync message error\n"); goto out; }
+        printf("master snapshot=%d bytes\n", sync_ret);
 
 
-    struct { uint32_t qpn; uint32_t psn; union ibv_gid gid; }
-        __attribute__((packed)) local_short;
-    local_short.gid = local_gid;
-    local_short.psn = htonl(local_psn);
-    local_short.qpn = htonl(g_rdma.qp->qp_num);
+        free(mes);
+        mes = NULL;
 
-    if(nty_send(fd, &local_short, sizeof(local_short), 0) != (ssize_t)sizeof(local_short)){
-        perror("nty send error"); goto out;
-    }
 
-    struct { uint32_t qpn; uint32_t psn; uint32_t rkey;
-             uint64_t vaddr; union ibv_gid gid; }
-        __attribute__((packed)) remote_full;
+        if(rdma_push_stream((uint32_t)sync_ret) < 0){
+            fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
+        }
+        printf("master snapshot pushed ok\n");
 
-    if(nty_recv(fd, &remote_full, sizeof(remote_full), 0) != (ssize_t)sizeof(remote_full)){
-        perror("rdma nty recv error"); goto out;
-    }
-
-    g_slave.remote_qpn   = ntohl(remote_full.qpn);
-    g_slave.remote_psn   = ntohl(remote_full.psn);
-    g_slave.remote_rkey  = ntohl(remote_full.rkey);
-    g_slave.remote_vaddr = be64toh(remote_full.vaddr);
-    g_slave.remote_gid   = remote_full.gid;
-
-    if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn,
-                   &g_slave.remote_gid, g_slave.remote_psn,
-                   g_rdma.gid_index) != 0){
-        fprintf(stderr, "modify fail\n"); goto out;
-    }
-
-    printf("master load finish\n");
-
-    rc = 0; 
+        rc = 0;
     
-out:
-    free(mes);
-    if(rc < 0){
-        if(g_slave.fd >= 0) nty_close(g_slave.fd);
-        g_slave.fd = -1;
+    out:
+        free(mes);
+        if(rc < 0){
+            if(g_slave.fd >= 0) nty_close(g_slave.fd);
+            g_slave.fd = -1;
+            nty_coroutine_sleep(1000);
+            continue; 
+        }
+        return;
     }
-
 }
 
 // int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
@@ -794,7 +902,7 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
 
 
     nty_coroutine_create(&co, accept_func, p);
-    nty_coroutine_create(&co, rdma_handshake, p2);
+    nty_coroutine_create(&co, rdma_handshake, p);
     nty_schedule_run();
     return 0;
 }

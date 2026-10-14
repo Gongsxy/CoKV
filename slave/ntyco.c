@@ -22,7 +22,7 @@ static size_t  g_snap_len = 0;
 
 
 static int g_listen_ready;
-static int rdma_syncing = 0;
+// static int rdma_syncing = 0;
 
 Config cfg;
 
@@ -107,7 +107,7 @@ static int kvs_apply_kv_chunk(const char *msg, uint32_t len)//解析全量日誌
     return loaded;
 }
 
-void normal_func(void *arg);
+
 void rdma_handshake(void *arg)
 {   
 
@@ -416,7 +416,6 @@ void read_func(void *arg){
         perror("read arg error");
         return ;
     }
-    const int ctx_fd = cli_fd;
 
     char *buf = NULL; 
     char *response = NULL;
@@ -523,9 +522,6 @@ void accept_func(void *arg){
         return ;
     }
 
-
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-
     int on = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
@@ -588,15 +584,12 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
 
     int *p = calloc(1, sizeof(int));
     *p = server_cfg->port;
-    int *p2 = calloc(1, sizeof(int));  
-    if(!p2){ return -1; } 
-    *p2 = cfg.port;
 
     g_rdma_slave = *g_m_rdma;
 
 
     nty_coroutine_create(&co_a, accept_func, p);
-    nty_coroutine_create(&co_b, rdma_handshake, p2);
+    nty_coroutine_create(&co_b, rdma_handshake, NULL);
     nty_coroutine *co_repl = NULL;
     nty_coroutine_create(&co_repl, normal_func, NULL);
 

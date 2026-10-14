@@ -29,17 +29,17 @@ static Config cfg = {0};
 static void *s_storage;
 
 
-static int slave_fd = -1;
-static int master_fd = -1;
+// static int slave_fd = -1;
+// static int master_fd = -1;
 
-static int rdma_syncing = 0;
+static volatile int rdma_syncing = 0;
 
 static volatile int fwd_collecting = 0;
 static volatile int handshaking = 0;
 
 __g_rdma g_rdma = {0};
 __g_slave g_slave = {.fd = -1};
-__g_slave g_s_slave = {0};
+// __g_slave g_s_slave = {0};
 
 
 
@@ -72,23 +72,23 @@ static void co_sleep_ms(uint64_t ms) {
 
 
 
-int load_save_mes(){
-    if(cfg.add_save == 1){
-        int add_save_fd = open(ADD_FILENAME, O_RDONLY);
-        if(add_save_fd < 0) {
-            perror("open failed");
-            return -1;
-        }
-        return add_save_fd;
-    }else if(cfg.full_save == 1){
-        int full_save_fd = open(FULL_FILENAME, O_RDONLY);
-        if(full_save_fd < 0) {
-            perror("open failed");
-            return -1;
-        }
-        return full_save_fd;
-    }else return -1; 
-}
+// int load_save_mes(){
+//     if(cfg.add_save == 1){
+//         int add_save_fd = open(ADD_FILENAME, O_RDONLY);
+//         if(add_save_fd < 0) {
+//             perror("open failed");
+//             return -1;
+//         }
+//         return add_save_fd;
+//     }else if(cfg.full_save == 1){
+//         int full_save_fd = open(FULL_FILENAME, O_RDONLY);
+//         if(full_save_fd < 0) {
+//             perror("open failed");
+//             return -1;
+//         }
+//         return full_save_fd;
+//     }else return -1; 
+// }
 
 
 
@@ -183,13 +183,13 @@ static int rdma_push_stream(uint32_t total)//rdma send
 
         struct ibv_wc wc = {0};
         int n;
-        int spin = 0;
+        uint64_t cq_start = now_ms();
         while ((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0) {
-            if (++spin > 1000) {
+            if (now_ms() - cq_start > 3000) {
                 fprintf(stderr, "[push] poll cq timeout\n");
                 goto out;
             }
-            co_sleep_ms(100);
+            nty_coroutine_sleep(0);
         }
         if(n < 0 || wc.status != IBV_WC_SUCCESS){
             fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
@@ -241,136 +241,7 @@ static int sync_mes_to_rdma(char **msg, size_t *size){//save .tmp
 }
 
 
-#if 0
-void rdma_handshake(void *arg){
-    int listen_fd = nty_socket(AF_INET, SOCK_STREAM, 0);
-    if(listen_fd < 0){
-        perror("nty socket error");
-        return ;
-    }
 
-    int reuse = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
-    struct sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(9998);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    socklen_t len = sizeof(addr);
-    if(bind(listen_fd, &addr, len) < 0){
-        close(listen_fd);
-        perror("bind error");
-        return ;
-    }
-
-    int ret = listen(listen_fd, 5);
-    if(ret < 0){
-        close(listen_fd);
-        perror("listen");
-        return ;
-    }
-
-    int fd = nty_accept(listen_fd, (struct sockaddr *)&addr, &len);
-    if(fd < 0){
-       nty_close(listen_fd);
-       perror("nty accept error");
-       return ;
-   }
-
-    g_slave.fd = fd;
-
-    struct {
-        uint32_t qpn;
-        uint32_t psn;
-        uint32_t rkey;
-        uint64_t vaddr;
-        union ibv_gid gid;
-    }__attribute__((packed)) remote_info;
-
-    ssize_t nr = nty_recv(fd, &remote_info, sizeof(remote_info), 0);
-    if(nr != sizeof(remote_info)){
-        perror("rdma nty recv error");
-        return ;
-    }
-    
-
-    g_slave.remote_gid = remote_info.gid;
-    g_slave.remote_psn = ntohl(remote_info.psn);
-    g_slave.remote_qpn = ntohl(remote_info.qpn);
-    g_slave.remote_rkey = ntohl(remote_info.rkey);
-    g_slave.remote_vaddr = be64toh(remote_info.vaddr);
-
-    g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
-
-    union ibv_gid local_gid;
-    if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
-        perror("ibv query gid error");
-        return ;
-    }
-
-    struct {
-        uint32_t qpn;
-        uint32_t psn;
-        union ibv_gid gid;
-    }__attribute__((packed)) local_info;
-
-    uint32_t local_psn;
-    ssize_t r_ret = getrandom(&local_psn, sizeof(local_psn), 0);
-    local_psn &= 0xffffff;
-    if (r_ret != sizeof(local_psn)) {
-        perror("getrandom error"); 
-        return ;
-    }
-
-    local_info.gid = local_gid;
-    local_info.psn = htonl(local_psn);
-    local_info.qpn = htonl(g_rdma.qp->qp_num);
-
-    if(nty_send(fd, &local_info, sizeof(local_info), 0) != sizeof(local_info)){
-        perror("nty send error");
-        return ;
-    }
-
-    if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn, g_rdma.gid_index) != 0){ fprintf(stderr, "modify fail\n"); return ; }
-
-    printf("master load finish\n");
-
-
-    size_t mes_size = 1024 * 1024 * 1;
-    char  *mes      = malloc(mes_size);
-    if (!mes) { perror("mes malloc"); return; }
-    memset(mes, 0, mes_size);
-
-    int sync_ret = sync_mes_to_rdma(&mes, &mes_size);  
-    if (sync_ret < 0) {
-        fprintf(stderr, "sync message error\n");
-        free(mes);
-        return;
-    }
-
-    printf("master snapshot=%d bytes", sync_ret);
-
-
-    int push_ret = rdma_push_stream(mes, (uint32_t)sync_ret);
-
-    free(mes);
-    mes = NULL;
-
-    if (push_ret < 0) {
-        fprintf(stderr, "[master] push snapshot FAILED\n");
-        nty_close(fd);
-        g_slave.fd = -1;
-        nty_close(listen_fd);
-        return;
-    }
-
-    printf("master snapshot pushed ok\n");
-
-    nty_close(listen_fd);
-    return;
-}
-#else 
 static void slave_send_func(void *arg);
 
 void rdma_handshake(void *arg){
@@ -412,6 +283,7 @@ void rdma_handshake(void *arg){
     g_slave.fd = fd;
 
     struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(9998);
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -421,13 +293,12 @@ void rdma_handshake(void *arg){
         goto out;
     }
 
-    int connected = 0;
     if (nty_connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "[sync] connect %s:9998 fail: %s\n", cfg.sync_ip, strerror(errno));
         goto out;
     }  
 
-    fprintf(stderr, "[rdma] connected to %s:9998 fd=%d\n", cfg.sync_ip, fd);
+    // fprintf(stderr, "[rdma] connected to %s:9998 fd=%d\n", cfg.sync_ip, fd);
 
     g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
 
@@ -495,7 +366,7 @@ void rdma_handshake(void *arg){
         nty_coroutine *co;
         nty_coroutine_create(&co, slave_send_func, NULL);
     }
-    handshaking = 0;
+    
 out:
     free(mes);
     if(rc < 0){
@@ -510,11 +381,11 @@ out:
         g_slave_sr.off = 0;
     }
 
+    handshaking = 0;
     return;
     
 }
 
-#endif
 
 
 static void slave_send_func(void *arg)//send info in ebpf send 
@@ -554,7 +425,7 @@ static void slave_send_func(void *arg)//send info in ebpf send
 
 
             if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS)) {
-                co_sleep_ms(100);
+                nty_coroutine_sleep(0);
                 continue;
             }
             // fprintf(stderr,
@@ -629,7 +500,7 @@ void master_forward_to_slave(const char *data, unsigned len) {//ebpf send
     g_slave_sr.len += len;
     g_slave_sr.want = 1;
 
-    if (!g_slave_sr.sending) {
+    if (rdma_syncing && !g_slave_sr.sending) {
         g_slave_sr.sending = 1;
         g_slave_sr.want = 0;
         nty_coroutine *co;
@@ -649,6 +520,7 @@ int kvs_sync(void){//recv SYNC
     fwd_collecting = 0;
     rdma_syncing = 0;
     if(nty_coroutine_create(&co, rdma_handshake, NULL) != 0){
+        handshaking = 0;
         return -1;
     }
     return 0;
@@ -766,9 +638,9 @@ void read_func(void *arg){
         static uint64_t last_trim_ms = 0;
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (now_ms - last_trim_ms >= 1000) {        
-            last_trim_ms = now_ms;
+        uint64_t cur_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+        if (cur_ms - last_trim_ms >= 1000) {        
+            last_trim_ms = cur_ms;
             malloc_trim(0);
         }
         
@@ -831,13 +703,13 @@ void accept_func(void *arg){
         socklen_t len = sizeof(struct sockaddr_in);
         int client_fd = nty_accept(fd, (struct sockaddr *)&addr, &len);
         if (client_fd < 0) {
-            if (client_fd < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue; 
-                if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS) continue; 
-                if (errno == EBADF || errno == EINVAL) break;
-                perror("nty_accept");
-                continue;
-            }
+            
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue; 
+            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS) continue; 
+            if (errno == EBADF || errno == EINVAL) break;
+            perror("nty_accept");
+            continue;
+            
         }
 
         

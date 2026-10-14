@@ -39,7 +39,7 @@ const char *command[] = {
     "RSET","RGET","RDEL","RMOD","REXIST",
     "HSET","HGET","HDEL","HMOD","HEXIST",
     "SSET","SGET","SDEL","SMOD","SEXIST",
-    "SYNC","PING","QUIT","INFO","SAVE",
+    "PING","QUIT","SYNC","INFO","SAVE",
     "CLEAR"
 };
 
@@ -73,9 +73,9 @@ enum {
     KVS_CMD_SMOD,
     KVS_CMD_SEXIST,
 
-    KVS_CMD_SYNC,
     KVS_CMD_PING,
     KVS_CMD_QUIT,
+    KVS_CMD_SYNC,
     KVS_CMD_INFO,
     KVS_CMD_SAVE,
     KVS_CMD_CLEAR,
@@ -173,7 +173,7 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
     char *value = tokens[2];
     int length = 0;
     int ret = 0;
-    
+
     switch(i){
 
 #if ENABLE_ARRAY
@@ -433,7 +433,12 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
             break;
         }
         case KVS_CMD_SYNC:{
-
+            extern int kvs_sync(void);
+            int r = kvs_sync(); 
+            if (server_cfg.show_response == 1){
+                length = sprintf(*response, (r == 0) ? "+OK\r\n" : "-ERR sync failed\r\n");
+            }
+                
             break;
         }
         case KVS_CMD_INFO:{
@@ -646,15 +651,6 @@ int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size
         }
         p += 2; 
 
-            // if(server_cfg.use_mempool == 1){
-            //     tokens[1] = mp_alloc(cmd_pool, *key_len + 1);
-            // }else 
-        // tokens[1] = malloc(*key_len + 1);
-        // if(tokens[1] == NULL) { free(tokens[0]); tokens[0] = NULL; return -1; }
-
-        // memcpy(tokens[1], p, *key_len);
-        // tokens[1][*key_len] = '\0';
-
         tokens[1] = p;
     }
 
@@ -673,18 +669,6 @@ int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size
         }
             p += 2;
 
-            // if(server_cfg.use_mempool == 1){
-            //     tokens[2] = mp_alloc(cmd_pool, *value_len + 1);
-            // }else 
-        // tokens[2] = malloc(*value_len + 1);
-        // if(tokens[2] == NULL) { 
-        //     free(tokens[0]); free(tokens[1]); 
-        //     tokens[0] = NULL; tokens[1] = NULL;
-        //     return -1; 
-        // }
-
-        // memcpy(tokens[2], p, *value_len);
-        // tokens[2][*value_len] = '\0';
         tokens[2] = p;
     }
     
@@ -825,6 +809,7 @@ static void reap_add_completions(void)
 }
 
 
+static int slave_fd = -1;
 int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size){ 
 
     if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
@@ -974,6 +959,14 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
 
         if(server_cfg.add_save == 1) {
             reap_add_completions();
+            
+            if(strncmp(tokens[0], "SYNC", 4) == 0){
+                skip_add_log = 1;
+            }else if(strncmp(tokens[0], "SAVE", 4) == 0){
+                skip_add_log = 1;
+            }else if(strncmp(tokens[0], "INFO", 4) == 0){
+                skip_add_log = 1;
+            }
 
             if(load_saved_msg == 1 && skip_add_log == 0){
 
@@ -1464,8 +1457,7 @@ static int load_hmac_key(void){
 
 
 static int add_save_flag = 0;
-static pthread_t add_pid;
-static pthread_t full_pid;
+
 int main(int argc, char const *argv[]){
 
     load_config("config/server.conf", &server_cfg);

@@ -34,16 +34,6 @@ int cap_handle_info(void *ctx, void *data, size_t size){
     if (e->len == 0 || e->len > MAX_SIZE) return 0;
 
 
-
-
-	// static unsigned long long rb_cnt = 0, rb_bytes = 0;
-    // rb_cnt++; rb_bytes += e->len;
-    // if (rb_cnt <= 20 || (rb_cnt % 200) == 0)
-    //     fprintf(stderr, "[rb] #%llu  len=%u bytes=%llu\n",
-    //             rb_cnt, e->len, rb_bytes);
-
-
-
     master_forward_to_slave(e->resp_info, e->len);
 
     return 0;

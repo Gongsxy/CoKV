@@ -24,6 +24,10 @@ typedef struct hashtable_s kvs_hash_t;
 #define FULL_HDR_LEN   (PACK_LEN_OFF + CRC_LEN + VERSION_OFF + COUNT_OFF)
 
 
+#define HASH_LOAD_FACTOR 0.75
+
+#define MAX_TABLE_SIZE	1024
+
 static Config cfg = {0};
 static struct mp_pool *pool;
 void cfg_init(void) {
@@ -112,6 +116,31 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
     return node;
 }
 
+
+static int kvs_hash_rehash(kvs_hash_t *hash, size_t new_slots)
+{
+    if (!hash || new_slots <= hash->max_slots) return -1;
+
+    hashnode_t **new_nodes = (hashnode_t **)calloc(new_slots, sizeof(hashnode_t *));
+    if (!new_nodes) return -1;
+
+    size_t old_slots = hash->max_slots;
+    for (size_t i = 0; i < old_slots; i++) {
+        hashnode_t *node = hash->nodes[i];
+        while (node) {
+            hashnode_t *next = node->next;
+            int idx = _hash(node->key, node->key_len, (int)new_slots);
+            node->next    = new_nodes[idx];
+            new_nodes[idx] = node;
+            node = next;
+        }
+    }
+
+    free(hash->nodes);
+    hash->nodes     = new_nodes;
+    hash->max_slots = new_slots;
+    return 0;
+}
 
 
 static void _free_node(hashnode_t *node) {
@@ -203,6 +232,10 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_
     new_node->next   = hash->nodes[idx];
     hash->nodes[idx] = new_node;
     hash->count++;
+
+    if (hash->count > (size_t)(hash->max_slots * HASH_LOAD_FACTOR)) {
+        kvs_hash_rehash(hash, hash->max_slots * 2);
+    }
 
     return 0;
 }

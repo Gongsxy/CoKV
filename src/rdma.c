@@ -5,7 +5,7 @@
 #include "../NtyCo/core/nty_coroutine.h"
 #include "load_conf.h"
 
-#define RDMA_BUF_SIZE   1024 * 1024 * 5
+#define RDMA_BUF_SIZE   1024 * 1024 * 10
 
 #define ADD_FILENAME    "config/add.txt"
 #define FULL_FILENAME   "config/full.txt"

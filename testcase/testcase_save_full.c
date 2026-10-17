@@ -66,6 +66,12 @@ void testcase_get(int connfd)
 	struct timeval rto = { 5, 0 };
 	setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
 
+struct timeval w0, w1;
+	gettimeofday(&w0, NULL); 
+long long io_us = 0;
+	struct timeval b0, b1;
+
+
 	for (start = 0; start < GET_TOTAL && !stop; start += GET_BATCH) {
 
 		int batch = (GET_TOTAL - start < GET_BATCH) ? (GET_TOTAL - start) : GET_BATCH;
@@ -84,7 +90,7 @@ void testcase_get(int connfd)
 			len += (size_t)snprintf(send_mes + len, cap - len,
 						"*2\r\n$3\r\nGET\r\n$%d\r\n%s\r\n", klen, key);
 		}
-
+gettimeofday(&b0, NULL);
 		if (send_all(connfd, send_mes, len) < 0) {
 			printf("send failed: batch=%d, %s\n", start, strerror(errno));
 			break;
@@ -175,10 +181,20 @@ void testcase_get(int connfd)
 				got++;
 			}
 		}
+
+		gettimeofday(&b1, NULL);
+		io_us += (long long)(b1.tv_sec - b0.tv_sec) * 1000000LL
+		       + (b1.tv_usec - b0.tv_usec);
 	}
+
+	long   replied = ok + miss + bad + err;      /* 实际收完并解析掉的条数 */
+	long   cost_ms = (long)(io_us / 1000);
+	double qps     = io_us > 0 ? (double)replied * 1000000.0 / (double)io_us : 0.0;
 
 	printf("result: ok=%ld miss=%ld bad=%ld err=%ld / total=%d  first_bad=%d\n",
 	       ok, miss, bad, err, GET_TOTAL, first_bad);
+	printf("time: %ld ms\nQPS: %.2f\n", cost_ms, qps);
+	fflush(stdout);
 
 	free(rbuf);
 	free(send_mes);

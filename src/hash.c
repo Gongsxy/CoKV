@@ -28,6 +28,21 @@ typedef struct hashtable_s kvs_hash_t;
 
 #define MAX_TABLE_SIZE	1024
 
+
+#if 1
+#include "slab_pool.h"
+static slab_pool_t g_cls_pool[4];
+static const size_t g_cls_size[4] = {64, 128, 256, 512};
+static int g_pools_ready = 0;
+
+static void hash_pools_init(void){
+    if (g_pools_ready) return;
+    for (int i = 0; i < 4; i++) slab_pool_init(&g_cls_pool[i], g_cls_size[i]);
+    g_pools_ready = 1;
+}
+#endif
+
+
 static Config cfg = {0};
 static struct mp_pool *pool;
 void cfg_init(void) {
@@ -95,9 +110,23 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 
     size_t need = sizeof(hashnode_t) + (size_t)key_len + 1 + (size_t)value_len + 1;
 
+
+#if 0
+    hashnode_t *node = NULL;
+    uint8_t cls = 0xFF;
+    
+    for (int i = 0; i < 4; i++) {
+        if (need <= g_cls_size[i]) { node = slab_alloc(&g_cls_pool[i]); cls = (uint8_t)i; break; }
+    }
+
+    if (!node) { node = malloc(need); cls = 0xFF; }
+    if (!node) return NULL;
+    node->cls = cls;
+#else 
     hashnode_t *node = malloc(need);
     if (!node) return NULL;
-
+    node->cls = 0xFF;
+#endif
     char *p = (char *)(node + 1);
 
     node->key = p;
@@ -145,6 +174,9 @@ static int kvs_hash_rehash(kvs_hash_t *hash, size_t new_slots)
 
 static void _free_node(hashnode_t *node) {
     if (!node) return;
+#if 0
+    if (node->cls != 0xFF) { slab_free(&g_cls_pool[node->cls], node); return; }
+#endif
 
 	free(node);
 }
@@ -153,7 +185,11 @@ static void _free_node(hashnode_t *node) {
 //
 int kvs_hash_create(kvs_hash_t *hash) {
 
-	if (!hash) return -1;
+    if (!hash) return -1;
+
+#if 0
+    hash_pools_init();
+#endif
 
 	memset(hash, 0, sizeof(kvs_hash_t));
 
@@ -189,6 +225,11 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 		}
 	}
 
+#if 0
+    for (int i = 0; i < 4; i++) slab_pool_destroy(&g_cls_pool[i]);
+    g_pools_ready = 0;
+#endif
+
 	free(hash->nodes);
 
     hash->nodes = NULL;
@@ -198,7 +239,7 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 
 
 
-// mp
+
 int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len) {
 
 	if (!hash || !key || !value) return -1;
@@ -241,7 +282,7 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_
 }
 
 
-char * kvs_hash_get(kvs_hash_t *hash, char *key, size_t key_len, size_t *value_len) {
+char *kvs_hash_get(kvs_hash_t *hash, char *key, size_t key_len, size_t *value_len) {
 
 	if (!hash || !key || key_len < 0) return NULL;
 

@@ -29,6 +29,14 @@
     # 编译成功后会生成 .output/resp_capture.bpf.o 和 .output/resp_capture.skel.h
     ```
 5. 返回项目根目录
+6. 生成 32 字节(256-bit)的随机安全密钥
+
+    在启动服务前，请确保 `config` 目录存在，并生成用于快照防篡改的 HMAC 密钥:
+
+    ```bash
+    # 此秘钥用于生成和校验快照文件的 HMAC
+    head -c 32 /dev/urandom > config/hmac.key
+    ```
 
 ### 2. 配置项
 注：配置文件中 `1` 代表开，`0` 代表关

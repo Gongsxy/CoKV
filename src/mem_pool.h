@@ -25,6 +25,7 @@ struct mp_large_s{
 
 struct mp_pool{
     size_t max;
+    size_t block_size;
     struct mp_block_s *current;
     struct mp_large_s *large;
     

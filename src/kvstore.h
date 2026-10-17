@@ -139,9 +139,7 @@ int kvs_array_save(kvs_array_t *inst, char *msg);
 extern kvs_array_t *globle_array;
 
 #if ENABLE_HASH
-#define MAX_KEY_LEN	128
-#define MAX_VALUE_LEN	512
-#define MAX_TABLE_SIZE	1024
+
 
 
 extern kvs_rbtree_t *globle_rbtree;
@@ -158,7 +156,7 @@ typedef struct hashnode_s {
 	int key_len;      
     int value_len;
 	struct hashnode_s *next;
-	
+	uint8_t cls;
 } hashnode_t;
 
 

@@ -1,4 +1,4 @@
-
+#define _POSIX_C_SOURCE 200809L 
 #include "kvstore.h"
 #include "server.h"
 #include "load_conf.h"
@@ -11,6 +11,16 @@
 
 #include <signal.h>
 #include <malloc.h>
+
+
+
+#include <time.h>
+static long long g_writes = 0;
+long long g_save_every = 0;
+
+
+
+
 
 const char *malloc_conf =
     "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0,"
@@ -40,7 +50,7 @@ const char *command[] = {
     "HSET","HGET","HDEL","HMOD","HEXIST",
     "SSET","SGET","SDEL","SMOD","SEXIST",
     "PING","QUIT","SYNC","INFO","SAVE",
-    "CLEAR"
+    "ECHO","CLEAR"
 };
 
 const char *key_value_command[] = {
@@ -78,6 +88,7 @@ enum {
     KVS_CMD_SYNC,
     KVS_CMD_INFO,
     KVS_CMD_SAVE,
+    KVS_CMD_ECHO,
     KVS_CMD_CLEAR,
     KVS_CMD_COUNT
 };
@@ -152,6 +163,12 @@ int get_full_fd(void){
     return globle_full_fd;
 }
 
+
+void kvs_heap_compact(void){
+    void *p = malloc(1024);
+    if (p) free(p);
+    malloc_trim(0);
+}
 
 static int skip_add_log = 0;
 int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, size_t *key_len, size_t *value_len){
@@ -315,6 +332,27 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
             }else{
                 if(server_cfg.show_response == 1) length = sprintf(*response,"+OK\r\n");
             }
+
+
+            if (g_save_every > 0 && ++g_writes >= g_save_every) {
+                g_writes = 0;
+                int      saved_skip = skip_add_log;
+                char    *toks[3] = { (char *)"SAVE", NULL, NULL };
+                size_t   kl = 0, vl = 0;
+                struct timespec a, b;
+
+                clock_gettime(CLOCK_MONOTONIC, &a);
+                int slen = kvs_protocol_filter(toks, response, resp_length, &kl, &vl);
+                if (slen > 0) length = slen;
+                clock_gettime(CLOCK_MONOTONIC, &b);
+
+                skip_add_log = saved_skip;
+
+                fprintf(stderr, "[save] every=%lld cost=%.1fms\n",
+                        g_save_every,
+                        (b.tv_sec - a.tv_sec) * 1000.0
+                      + (b.tv_nsec - a.tv_nsec) / 1e6);
+            }
             break;
         }
         case KVS_CMD_HGET:{
@@ -340,13 +378,13 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
             break;
         }
         case KVS_CMD_HDEL:{
-            ret = kvs_hash_del(globle_hash,key, *key_len);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR internal error\r\n");
-            }else if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,":1\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,":0\r\n");
+            ret = kvs_hash_del(globle_hash, key, *key_len);
+            if (ret == -2) {
+                length = sprintf(*response, "-ERR internal error\r\n");
+            } else if (ret == 0) {
+                length = sprintf(*response, ":1\r\n");
+            } else {
+                length = sprintf(*response, ":0\r\n");
             }
             break;
         }
@@ -464,7 +502,11 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                 }
                 char *tmp = NULL;
                 size_t tmp_size = 1024 * 1024 * 1;
-                tmp = calloc(1, tmp_size + MAC_LEN);
+                // if(server_cfg.use_mempool == 1){
+                //     tmp = mp_alloc(pool, tmp_size + MAC_LEN);
+                // }else{
+                    tmp = calloc(1, tmp_size + MAC_LEN);// realloc
+                // }
                 
                 if (!tmp) {
                     length = sprintf(*response, "-ERR out of memory\r\n");
@@ -479,7 +521,11 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
 
                 if (hash_length == 0) {
                     close(full_fd); globle_full_fd = -1;
-                    free(tmp);
+                    // if(server_cfg.use_mempool == 1){
+                    //     mp_large_free(pool, tmp);
+                    // }else{
+                        free(tmp);// realloc
+                    // }
                     length = sprintf(*response, "+OK\r\n");
                     break;
                 }
@@ -490,7 +536,11 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                     close(full_fd);
                     globle_full_fd = -1; 
                      
-                    free(tmp);
+                    // if(server_cfg.use_mempool == 1){
+                    //     mp_large_free(pool, tmp);
+                    // }else{
+                        free(tmp);// realloc
+                    // }
                     length = sprintf(*response, "-ERR out of memory\r\n");
                     break;
                 }
@@ -502,15 +552,29 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                            (const unsigned char *)tmp, hash_length,
                            g_hmac_key) != 0) {
                     close(full_fd); globle_full_fd = -1; 
-                    free(tmp); 
+                    // if(server_cfg.use_mempool == 1){
+                    //     mp_large_free(pool, tmp);
+                    // }else{
+                        free(tmp);// realloc
+                    // } 
                     length = sprintf(*response,"-ERR hmac failed\r\n"); 
                     break;
                 }
 
-                struct uring_info *full_info = calloc(1, sizeof(*full_info));
+                struct uring_info *full_info = NULL;
+                if(server_cfg.use_mempool == 1){
+                    full_info = mp_alloc(cmd_pool, sizeof(*full_info));
+                }else{
+                    full_info = calloc(1, sizeof(*full_info));
+                }
                 if(full_info == NULL){
                     close(full_fd); globle_full_fd = -1;
-                    free(tmp);
+                    // if(server_cfg.use_mempool == 1){
+                    //     mp_large_free(pool, tmp);
+                    // }else{
+                        free(tmp);// realloc
+                    // }
+                    
                     length = sprintf(*response, "-ERR out of memory\r\n");
                     break;
                 }
@@ -518,9 +582,20 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                 struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
                 if (!sqe_full) {
 
-                    close(full_fd); globle_full_fd = -1;
-                    free(full_info);
-                    free(tmp);
+                    close(full_fd); 
+                    globle_full_fd = -1;
+                    if(server_cfg.use_mempool == 1){
+                        mp_large_free(cmd_pool, full_info->save_buf_ptr);
+                        mp_large_free(cmd_pool, full_info);
+                    }else{
+                        free(full_info->save_buf_ptr);
+                        free(full_info);
+                    }
+                    // if(server_cfg.use_mempool == 1){
+                    //     mp_large_free(pool, tmp);
+                    // }else{
+                        free(tmp);// realloc
+                    // }
                     length = sprintf(*response, "-ERR save busy\r\n");
                     break;
                 }
@@ -553,8 +628,14 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                     }
 
                     if (info) {
-                        free(info->save_buf_ptr);
-                        free(info);
+                        if(server_cfg.use_mempool == 1){
+                            mp_large_free(pool, tmp);
+                            mp_large_free(pool, tmp);
+                        }else{
+                            free(info->save_buf_ptr);
+                            free(info);
+                        }
+                        // free(info);
                     }
                     io_uring_cqe_seen(&full_ring, cqe);
                     close(full_fd); globle_full_fd = -1;
@@ -567,6 +648,21 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                 break;
             }
             length = sprintf(*response, "-ERR snapshot unavailable\r\n");
+            break;
+        }
+        case KVS_CMD_ECHO:{
+            const char *arg = tokens[1] ? tokens[1] : "";
+            int alen = (int)*key_len;
+            if (server_cfg.show_response == 1) {
+                size_t need = (size_t)alen + 32; 
+                if (need > *resp_length) {
+                    void *p = realloc(*response, need);
+                    if (p == NULL) return -1;
+                    *response   = p;
+                    *resp_length = need;
+                }
+                length = sprintf(*response, "$%d\r\n%.*s\r\n", alen, alen, arg);
+            }
             break;
         }
         case KVS_CMD_CLEAR:{
@@ -619,18 +715,20 @@ int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size
     p += 2;
     if(*p == '$'){
         p += 1;
-        cmd_len = *p - '0';
-        p += 1;
+        while(*p >= '0' && *p <= '9'){
+            cmd_len = cmd_len * 10 + (*p - '0');
+            p += 1;
+        }
     }else return -2;
 
     p += 2;
 
-        // if(server_cfg.use_mempool == 1){
-        //     tokens[0] = mp_alloc(cmd_pool, cmd_len + 1);
-        // }else 
-    
-    tokens[0] = malloc(cmd_len + 1);
-    if(tokens[0] == NULL) return -1;
+    if(server_cfg.use_mempool == 1){
+        tokens[0] = mp_alloc(cmd_pool, cmd_len + 1);
+    }else {
+        tokens[0] = malloc(cmd_len + 1);
+        if(tokens[0] == NULL) return -1;
+    }
 
     memcpy(tokens[0], p, cmd_len);
     tokens[0][cmd_len] = '\0';
@@ -690,6 +788,8 @@ int kvs_is_complete(char *msg, int length, size_t *off){
             if (idx >= length) return -2;
             cmd_num = msg[idx] - '0'; 
             idx += 1;     
+        }else {
+            return -2;
         }
         
         if (length - idx < 2) return -2;
@@ -704,8 +804,11 @@ int kvs_is_complete(char *msg, int length, size_t *off){
             if(idx + 2 > length) return -2;
             idx += 1;
             if (idx >= length) return -2;
-            cmd_len = msg[idx] - '0';
-            idx += 1;
+            while(idx < length && msg[idx] >= '0' && msg[idx] <= '9'){
+                cmd_len = cmd_len * 10 + (msg[idx] - '0');
+                idx += 1;
+            }
+
             if(length - idx < 2) return -2;
             idx += 2;
         }else return -2;
@@ -778,7 +881,12 @@ void kvs_conn_ctx_free(int fd){
     if (fd < 0 || fd >= 1024) return;
 
     free(kvs_ctx[fd].mes); kvs_ctx[fd].mes = NULL;
-    free(kvs_ctx[fd].resp); kvs_ctx[fd].resp = NULL;
+    // if(server_cfg.use_mempool == 1){
+    //     mp_large_free(pool, kvs_ctx[fd].resp);
+    // }else{
+        free(kvs_ctx[fd].resp);
+    // }
+    kvs_ctx[fd].resp = NULL;
 
     kvs_ctx[fd].fd = -1; 
     kvs_ctx[fd].mes_len = 0; 
@@ -814,17 +922,23 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
 
     if (fd < 0 || fd >= 1024 || msg == NULL || length < 0) return -1;
 
+    // extern void master_forward_to_slave(const char *data, unsigned len);
+    // master_forward_to_slave(msg, length);
+
+
+
+
     kvs_ctx[fd].fd = fd;
     size_t key_len = 0; size_t value_len = 0; size_t packet_len = 0;
 
     if (kvs_ctx[fd].mes == NULL) {
         // if(server_cfg.use_mempool == 1){
-        //     mes = mp_alloc(pool, 1024 * 1024 * 5);
-        //     if(mes) memset(mes, 0, 1024 * 1024 * 5);
-        // }else 
-        kvs_ctx[fd].mes_size = 1024 * 64;
-        kvs_ctx[fd].mes = malloc(kvs_ctx[fd].mes_size);
-        if (kvs_ctx[fd].mes == NULL) { kvs_ctx[fd].mes_size = 0; return -1; }
+        //     kvs_ctx[fd].mes = mp_alloc(pool, 1024 * 1024 * 5);
+        // }else {
+            kvs_ctx[fd].mes_size = 1024 * 64;
+            kvs_ctx[fd].mes = malloc(kvs_ctx[fd].mes_size);
+            if (kvs_ctx[fd].mes == NULL) { kvs_ctx[fd].mes_size = 0; return -1; }
+        // }
         kvs_ctx[fd].mes_len = 0;
     }
 
@@ -897,7 +1011,11 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
             memmove(kvs_ctx[fd].mes, kvs_ctx[fd].mes + packet_len, kvs_ctx[fd].mes_len - packet_len);
             kvs_ctx[fd].mes_len -= packet_len;
 
-            free(tokens[0]);
+            if(server_cfg.use_mempool == 1){
+                mp_large_free(cmd_pool, tokens[0]);
+            }else{
+                free(tokens[0]);
+            }
             tokens[0] = tokens[1] = tokens[2] = NULL;
 
             const char *err = "-ERR split token error\r\n";
@@ -932,12 +1050,20 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
             
             if (kvs_ctx[fd].resp == NULL) {
                 kvs_ctx[fd].resp_cap = 1024;
-                kvs_ctx[fd].resp = malloc(kvs_ctx[fd].resp_cap);
-                if (kvs_ctx[fd].resp == NULL) {
-                    free(tokens[0]);
-                    tokens[0] = tokens[1] = tokens[2] = NULL;
-                    return -2;
-                }
+                // if(server_cfg.use_mempool == 1){
+                //     kvs_ctx[fd].resp = mp_alloc(pool, 1024 * 1024 * 5);
+                // }else {
+                    kvs_ctx[fd].resp = malloc(kvs_ctx[fd].resp_cap);
+                    if (kvs_ctx[fd].resp == NULL) {
+                        if(server_cfg.use_mempool == 1){
+                            mp_large_free(cmd_pool, tokens[0]);
+                        }else{
+                            free(tokens[0]);
+                        }
+                        tokens[0] = tokens[1] = tokens[2] = NULL;
+                        return -2;
+                    }
+                // }
             }
             kvs_ctx[fd].resp[0] = '\0';
             resp_buf = kvs_ctx[fd].resp;
@@ -1032,7 +1158,11 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
                     if (!slot) {
                         // fprintf(stderr, "[aof] pool empty, drop this record\n");   
                     } else {
-                        slot->buffer = malloc((size_t)packet_len + 4);
+                        if(server_cfg.use_mempool == 1){
+                            slot->buffer = mp_alloc(cmd_pool, (size_t)packet_len + 4);
+                        }else {
+                            slot->buffer = malloc((size_t)packet_len + 4);
+                        }
                         if (!slot->buffer) {
                             u_info_free(slot);
                         } else {
@@ -1045,7 +1175,12 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
                             
                             struct io_uring_sqe *sqe = io_uring_get_sqe(&add_ring);    
                             if (!sqe) {
-                                free(slot->buffer); slot->buffer = NULL;
+                                if(server_cfg.use_mempool == 1){
+                                    mp_large_free(cmd_pool, slot->buffer);
+                                }else{
+                                    free(slot->buffer); 
+                                }
+                                slot->buffer = NULL;
                                 u_info_free(slot);
                                 fprintf(stderr, "[aof] no sqe, drop this record\n");
                             }else{
@@ -1076,7 +1211,11 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
                     while (newcap < need_r) newcap += newcap / 2 + 64;
                     void *ptr = realloc(*response, newcap);
                     if (ptr == NULL) {
-                        free(tokens[0]);
+                        if(server_cfg.use_mempool == 1){
+                            mp_large_free(cmd_pool, tokens[0]);
+                        }else{
+                            free(tokens[0]);
+                        }
                         return -2;
                     }
                     *response = ptr; *response_size = newcap;
@@ -1088,7 +1227,11 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
             // fprintf(stderr, "[proto] drop reply: used=%d resp=%d limit=%d\n",
             //         total_response_len, resp_used, BUFFER_LENGTH);
 
-        free(tokens[0]);
+        if(server_cfg.use_mempool == 1){
+            mp_large_free(cmd_pool, tokens[0]);
+        }else{
+            free(tokens[0]);
+        }
         tokens[0] = tokens[1] = tokens[2] = NULL;
     }
 
@@ -1235,14 +1378,6 @@ void kvs_add_read(char *cmd, char *key, char *value){
         perror("mmap error");
         return ;
     }
-
-    
-    // char *tmp = NULL;
-    // if(server_cfg.use_mempool == 1){
-    //     tmp = mp_alloc(pool, 1024 * 1024 * 5);
-    // }else{
-    //     tmp = calloc(1, 1024 * 1024 * 5);
-    // }
 
     load_saved_msg = 0;
 
@@ -1462,6 +1597,11 @@ int main(int argc, char const *argv[]){
 
     load_config("config/server.conf", &server_cfg);
 
+// const char *e = getenv("SAVE_EVERY");
+// if (e) g_save_every = atoll(e);
+// fprintf(stderr, "[init] save_every=%lld\n", g_save_every);
+
+
     if (sodium_init() < 0) { fprintf(stderr, "sodium_init failed\n"); return 1; }
 
     if (load_hmac_key() != 0) {
@@ -1469,8 +1609,8 @@ int main(int argc, char const *argv[]){
         return 1;
     }
 
-    mallopt(M_MMAP_THRESHOLD, 128 * 1024);
-    mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+    mallopt(M_MMAP_THRESHOLD, 64 * 1024);
+    mallopt(M_TRIM_THRESHOLD, 64 * 1024);
 
 
     signal(SIGPIPE, SIG_IGN);
@@ -1487,9 +1627,11 @@ int main(int argc, char const *argv[]){
     g_full_ring_ok = (full_ok == 0);
 
     if(server_cfg.use_mempool == 1){
-        pool = mp_create(1024 * 1024 * 1);
-        cmd_pool = mp_create(64 * 1024);
+        pool = mp_create(64 * 1024);
+        cmd_pool = mp_create(4096);
     }
+
+    fprintf(stderr, "master load finish\n");
 
     init_kvs();
     char cmd[TXT_LENGTH] = {0};
@@ -1504,10 +1646,9 @@ int main(int argc, char const *argv[]){
 
     rdma_init(&gr);
 
-    // if(server_cfg.use_mempool == 0){
-    //     malloc_trim(0);
-    // }
-    malloc_trim(0);
+    if(server_cfg.use_mempool == 0){
+        malloc_trim(0);
+    }
 
     ntyco_start(&server_cfg, &gr);
     

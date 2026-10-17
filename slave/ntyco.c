@@ -38,6 +38,13 @@ static uint64_t now_ms(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
 }
+
+static uint64_t now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000ull;
+}
+
 static void co_sleep_ms(uint64_t ms) {
     uint64_t deadline = now_ms() + ms;
     while (now_ms() < deadline) {
@@ -141,12 +148,11 @@ void rdma_handshake(void *arg)
 
     g_listen_ready = 1;
 
-    printf("[rdma] repl coroutine started\n");
-
 
     const size_t buf_size = 1024 * 1024;
     size_t res_size = 1024 * 1024;
     
+
 
     for(;;){
 
@@ -154,6 +160,13 @@ void rdma_handshake(void *arg)
         res_size = 1024 * 1024;
         int total_loaded = 0;
         int snap_failed  = 0;
+
+
+        uint64_t t_load0 = 0, t_load1 = 0;     // 新增
+        uint64_t t_apply_us = 0, t_wait_us = 0; // 新增
+        int chunks = 0;                         // 新增
+
+
         uint32_t local_psn = 0;
         union ibv_gid local_gid;
 
@@ -171,6 +184,76 @@ void rdma_handshake(void *arg)
         cbuf = calloc(1, buf_size);
         cres = calloc(1, res_size);
         if (!cbuf || !cres) goto conn_out;
+
+#if 0
+        char mode = 0;
+        {
+            int got = 0;
+            while (got < 1) {
+                ssize_t r = nty_recv(fd, &mode + got, 1 - got, 0);
+                if (r > 0) { got += (int)r; break; }
+                if (r == 0) { fprintf(stderr, "[snap] peer closed\n"); goto conn_out; }
+                if (errno == EAGAIN || errno == EWOULDBLOCK ||
+                    errno == EINTR   || errno == EINPROGRESS) {
+                    nty_coroutine_sleep(0);          /* ★ 关键：让出后重试 */
+                    continue;
+                }
+                fprintf(stderr, "[snap] recv mode errno=%d (%s)\n", errno, strerror(errno));
+                goto conn_out;
+            }
+        }
+
+
+
+        if (mode == 'S') {
+            /* ================= sendfile 模式 ================= */
+            uint32_t total_net = 0;
+            if (nty_recv(fd, &total_net, sizeof(total_net), 0) != (ssize_t)sizeof(total_net)) {
+                fprintf(stderr, "[snap] recv total fail\n");
+                goto conn_out;
+            }
+            uint32_t total = ntohl(total_net);
+
+            uint64_t t_a0 = now_us();
+            uint32_t got = 0;
+
+            while (got < total) {
+                uint32_t want = total - got;
+                if (want > buf_size) want = (uint32_t)buf_size;
+
+                int n = nty_recv(fd, cbuf, want, 0);
+                if (n > 0) {
+                    int r = kvs_apply_kv_chunk(cbuf, (uint32_t)n);
+                    if (r < 0) { snap_failed = 1; break; }
+                    total_loaded += r;
+                    got += (uint32_t)n;
+                    chunks++;
+                    continue;
+                }
+                if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    nty_coroutine_sleep(0);
+                    continue;
+                }
+                fprintf(stderr, "[snap] recv body fail at %u/%u\n", got, total);
+                snap_failed = 1;
+                break;
+            }
+            t_apply_us = now_us() - t_a0;
+
+            fprintf(stderr, "[slave] sendfile total=%.3fs chunks=%d records=%d\n",
+                    t_apply_us / 1e6, chunks, total_loaded);
+
+            /* 发最终状态 */
+            {
+                uint32_t final_st = htonl(snap_failed ? 0 : 1);
+                if (nty_send(fd, &final_st, sizeof(final_st), 0) != (ssize_t)sizeof(final_st)) {
+                    fprintf(stderr, "[snap] send final status fail\n");
+                }
+            }
+            goto conn_out;              /* sendfile 模式结束，不走后面的增量循环 */
+        }
+#endif
+
 
         struct { uint32_t qpn; uint32_t psn; union ibv_gid gid; }
             __attribute__((packed)) remote_short;
@@ -214,26 +297,30 @@ void rdma_handshake(void *arg)
             fprintf(stderr, "modify fail\n"); goto conn_out;
         }
         
+t_load0 = now_us();
 
         for (;;) {
             uint32_t len_net;
+uint64_t w0 = now_us();
             if (nty_recv(fd, &len_net, sizeof(len_net), 0) != (ssize_t)sizeof(len_net)) {
                 fprintf(stderr, "[snap] recv length fail\n");
                 snap_failed = 1;
                 break;
             }
-
+t_wait_us += now_us() - w0;
             uint32_t chunk_len = ntohl(len_net);
             if (chunk_len == 0) break;
 
             if (chunk_len > g_rdma_slave.buf_size) {
-                fprintf(stderr, "[snap] chunk %u > rdma buf %zu\n",
-                        chunk_len, g_rdma_slave.buf_size);
+                fprintf(stderr, "[snap] chunk %u > buf %zu —— please modify rdma buf_size to >= %u\n",
+                        chunk_len, g_rdma_slave.buf_size, chunk_len);
                 snap_failed = 1;
                 break;
             }
-
+uint64_t a0 = now_us();
             int n = kvs_apply_kv_chunk(g_rdma_slave.buf, chunk_len);
+t_apply_us += now_us() - a0;
+chunks++;
             if (n < 0) { snap_failed = 1; break; }
             total_loaded += n;
 
@@ -244,7 +331,10 @@ void rdma_handshake(void *arg)
                 break;
             }
         }
-
+t_load1 = now_us();
+// fprintf(stderr, "[slave] load total=%.3fs wait_master=%.3fs apply=%.3fs chunks=%d records=%d\n",
+//             (t_load1 - t_load0) / 1e6, t_wait_us / 1e6, t_apply_us / 1e6,
+//             chunks, total_loaded);
         if (snap_failed) {
             fprintf(stderr, "[slave] snapshot aborted, closing\n");
             goto conn_out;
@@ -273,6 +363,12 @@ void rdma_handshake(void *arg)
 
         if (snap_failed) goto conn_out;
 
+
+        uint64_t t_snap_done = now_us();
+fprintf(stderr, "[SNAP_DONE] t=%llu records=%d\n", (unsigned long long)t_snap_done, total_loaded);
+
+uint64_t t_repl_first = 0;
+
         for (;;) {
             int n = nty_recv(fd, cbuf, buf_size, 0);
             if (n == 0) break;
@@ -281,6 +377,14 @@ void rdma_handshake(void *arg)
                 perror("repl nty_recv");
                 break;
             }
+
+if (t_repl_first == 0) {
+        t_repl_first = now_us();
+        fprintf(stderr, "[REPL_FIRST] t=%llu dt_since_snap_done=%.3f ms\n",
+                (unsigned long long)t_repl_first,
+                (t_repl_first - t_snap_done) / 1000.0);
+    }
+
             int r = kvs_protocol(fd, cbuf, n, &cres, &res_size);
             if (r < 0) {
                 fprintf(stderr, "[repl] apply fail(%d), drop stream\n", r);

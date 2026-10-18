@@ -76,11 +76,8 @@ int ringbuf_init(void){
         goto fail;
     }
 
-	struct ring_buffer_opts opts = {
-        .sz = 64 * 1024 * 1024,
-    };
 
-	g_rb = ring_buffer__new(map_fd, cap_handle_info, &opts, NULL);
+	g_rb = ring_buffer__new(map_fd, cap_handle_info, NULL, NULL);
 	if (g_rb == NULL) {
         fprintf(stderr, "ring_buffer__new failed\n");
         goto fail;
@@ -104,16 +101,15 @@ int resp_capture_poll(int max_records){
 	if (!g_rb) return 0;
 
 	int total = 0;
-	while(1){
+    int budget = (max_records > 0) ? max_records : 8192;
+	while(total < budget){
 		int n = ring_buffer__poll(g_rb, 0);
 		if (n < 0) {
             if (n == -EINTR) continue;
-            fprintf(stderr, "[rb] poll error %d\n", n);
             return n;
         }
-		if (n == 0) break;
-		total += n;
-		if (total >= 8192) break;
+        if (n == 0) break;
+        total += n;
 	}
 
 	return total;

@@ -1,4 +1,4 @@
-
+#define _GNU_SOURCE
 
 #ifndef __KVSTORE_H__
 #define __KVSTORE_H__
@@ -8,18 +8,20 @@
 #include <string.h>
 #include <time.h>
 #include <liburing.h>
-#include <netinet/in.h>
+
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <ctype.h>
-#include <sys/mman.h>
+#include <sys/mman.h>			
 #include <sys/stat.h>
+
 
 #include <pthread.h>
 
 #include "load_conf.h"
 #include "rdma.h"
+#include "../NtyCo/core/nty_coroutine.h"
 
 // #include "server.h"
 

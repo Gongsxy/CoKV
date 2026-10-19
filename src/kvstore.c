@@ -164,6 +164,83 @@ int get_full_fd(void){
 }
 
 
+
+static pid_t g_bgsave_pid = -1;
+static int write_all(int fd, const char *buf, size_t len) {
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        buf += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+
+static void bgsave_child(const char *tmp_path) {// full save for child
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT,  SIG_DFL);
+
+    // close_range(3, ~0U, 0);
+
+    int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) _exit(2);
+
+    size_t cap = 1024 * 1024;
+    char *buf = calloc(1, cap + MAC_LEN);
+    if (!buf) _exit(3);
+
+    uint32_t count = (uint32_t)kvs_hash_count(globle_hash);
+    size_t len = kvs_hash_save(globle_hash, &buf, &cap, count);
+    if (len == 0 && count > 0) _exit(4);
+
+    void *p = realloc(buf, len + MAC_LEN);
+    if (!p) _exit(3);
+    buf = p;
+
+    if (crypto_auth_hmacsha256((unsigned char *)(buf + len),
+                               (const unsigned char *)buf, len, g_hmac_key) != 0)
+        _exit(5);
+
+    if (write_all(fd, buf, len + MAC_LEN) < 0) _exit(6);
+    if (fsync(fd) < 0)  _exit(7);
+    if (close(fd) < 0)  _exit(7);
+
+    if (rename(tmp_path, "config/full.txt") < 0) _exit(8);
+
+    int dfd = open("config", O_RDONLY | O_DIRECTORY);
+    if (dfd < 0) _exit(9);
+    if (fsync(dfd) < 0) _exit(9);
+    close(dfd);
+
+    _exit(0);
+}
+
+
+void check_bgsave_done(void) {// check child progression
+    if (g_bgsave_pid <= 0) return;
+    int st;
+    pid_t r = waitpid(g_bgsave_pid, &st, WNOHANG);
+    if (r == 0) return;
+    if (r == g_bgsave_pid) {
+        if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
+            fprintf(stderr,"bgsave ok\n");
+        else if (WIFEXITED(st)){
+            fprintf(stderr,"bgsave failed, code=%d", WEXITSTATUS(st));
+        }else fprintf(stderr,"bgsave killed by signal %d", WTERMSIG(st));
+            
+        unlink("config/tmp_mes.tmp");
+    }
+    g_bgsave_pid = -1;
+}
+
+
+
+
+
 void kvs_heap_compact(void){
     void *p = malloc(1024);
     if (p) free(p);
@@ -494,160 +571,32 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
         case KVS_CMD_SAVE:{
             
             skip_add_log = 1;
-            if(server_cfg.full_save == 1){
-                int full_fd = get_full_fd();
-                if (full_fd < 0) {
-                    length = sprintf(*response, "-ERR open full file failed\r\n");
-                    break;
-                }
-                char *tmp = NULL;
-                size_t tmp_size = 1024 * 1024 * 1;
-                // if(server_cfg.use_mempool == 1){
-                //     tmp = mp_alloc(pool, tmp_size + MAC_LEN);
-                // }else{
-                    tmp = calloc(1, tmp_size + MAC_LEN);// realloc
-                // }
-                
-                if (!tmp) {
-                    length = sprintf(*response, "-ERR out of memory\r\n");
-                    close(full_fd);
-                    globle_full_fd = -1;
-                    break;
-                }
+            check_bgsave_done();
 
-                uint32_t count = (uint32_t)kvs_hash_count(globle_hash);
-
-                size_t hash_length = kvs_hash_save(globle_hash, &tmp, &tmp_size, count);
-
-                if (hash_length == 0) {
-                    close(full_fd); globle_full_fd = -1;
-                    // if(server_cfg.use_mempool == 1){
-                    //     mp_large_free(pool, tmp);
-                    // }else{
-                        free(tmp);// realloc
-                    // }
-                    length = sprintf(*response, "+OK\r\n");
-                    break;
-                }
-
-                 
-                void *p = realloc(tmp, (size_t)hash_length + MAC_LEN);
-                if (p == NULL) { 
-                    close(full_fd);
-                    globle_full_fd = -1; 
-                     
-                    // if(server_cfg.use_mempool == 1){
-                    //     mp_large_free(pool, tmp);
-                    // }else{
-                        free(tmp);// realloc
-                    // }
-                    length = sprintf(*response, "-ERR out of memory\r\n");
-                    break;
-                }
-                tmp = p;
-                
-
-
-                if (crypto_auth_hmacsha256((unsigned char *)(tmp + hash_length),
-                           (const unsigned char *)tmp, hash_length,
-                           g_hmac_key) != 0) {
-                    close(full_fd); globle_full_fd = -1; 
-                    // if(server_cfg.use_mempool == 1){
-                    //     mp_large_free(pool, tmp);
-                    // }else{
-                        free(tmp);// realloc
-                    // } 
-                    length = sprintf(*response,"-ERR hmac failed\r\n"); 
-                    break;
-                }
-
-                struct uring_info *full_info = NULL;
-                if(server_cfg.use_mempool == 1){
-                    full_info = mp_alloc(cmd_pool, sizeof(*full_info));
-                }else{
-                    full_info = calloc(1, sizeof(*full_info));
-                }
-                if(full_info == NULL){
-                    close(full_fd); globle_full_fd = -1;
-                    // if(server_cfg.use_mempool == 1){
-                    //     mp_large_free(pool, tmp);
-                    // }else{
-                        free(tmp);// realloc
-                    // }
-                    
-                    length = sprintf(*response, "-ERR out of memory\r\n");
-                    break;
-                }
-
-                struct io_uring_sqe *sqe_full = io_uring_get_sqe(&full_ring);
-                if (!sqe_full) {
-
-                    close(full_fd); 
-                    globle_full_fd = -1;
-                    if(server_cfg.use_mempool == 1){
-                        mp_large_free(cmd_pool, full_info->save_buf_ptr);
-                        mp_large_free(cmd_pool, full_info);
-                    }else{
-                        free(full_info->save_buf_ptr);
-                        free(full_info);
-                    }
-                    // if(server_cfg.use_mempool == 1){
-                    //     mp_large_free(pool, tmp);
-                    // }else{
-                        free(tmp);// realloc
-                    // }
-                    length = sprintf(*response, "-ERR save busy\r\n");
-                    break;
-                }
-
-
-                memset(full_info, 0, sizeof(*full_info));
-                full_info->save_buf_ptr = tmp;
-                full_info->fd = full_fd;
-
-                io_uring_prep_write(sqe_full, full_fd, full_info->save_buf_ptr, hash_length + MAC_LEN, 0);
-                io_uring_sqe_set_data(sqe_full, full_info);
-
-                int sub_ret = io_uring_submit(&full_ring);
-                if (sub_ret < 0) {
-                    close(full_fd); globle_full_fd = -1;
-                    length = sprintf(*response, "-ERR submit failed\r\n");
-                    abort();
-                }
-
-                struct io_uring_cqe *cqe;
-                int wait_ret = io_uring_wait_cqe(&full_ring, &cqe);
-                if (wait_ret == 0) {
-                    struct uring_info *info = io_uring_cqe_get_data(cqe);
-
-                    if (cqe->res < 0) {
-                        length = sprintf(*response, "-ERR save failed\r\n");
-                    } else {
-                        fsync(full_fd);
-                        length = sprintf(*response, "+OK\r\n");
-                    }
-
-                    if (info) {
-                        if(server_cfg.use_mempool == 1){
-                            mp_large_free(pool, tmp);
-                            mp_large_free(pool, tmp);
-                        }else{
-                            free(info->save_buf_ptr);
-                            free(info);
-                        }
-                        // free(info);
-                    }
-                    io_uring_cqe_seen(&full_ring, cqe);
-                    close(full_fd); globle_full_fd = -1;
-                } else {
-                    close(full_fd); globle_full_fd = -1;
-                    abort();
-                    length = sprintf(*response, "-ERR save failed\r\n");
-                }
-
+            if (server_cfg.full_save != 1) {
+                length = sprintf(*response, "-ERR snapshot disabled\r\n");
                 break;
             }
-            length = sprintf(*response, "-ERR snapshot unavailable\r\n");
+            if (g_bgsave_pid > 0) {
+                length = sprintf(*response, "-ERR background save already in progress\r\n");
+                break;
+            }
+            
+            static char tmp_path[256];
+            snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", "config/tmp_mes");
+
+            pid_t pid = fork();
+            if (pid < 0) {
+                length = sprintf(*response, "-ERR fork failed\r\n");
+                break;
+            }else if (pid == 0) {
+                bgsave_child(tmp_path);
+            }
+            g_bgsave_pid = pid;
+
+            check_bgsave_done();
+
+            length = sprintf(*response, "+Background saving started\r\n");
             break;
         }
         case KVS_CMD_ECHO:{

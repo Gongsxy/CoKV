@@ -486,7 +486,7 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
 
 	size_t snap_len = (size_t)(p - *msg); 
 
-	int fd = open("config/save_mes.tmp", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	int fd = open("config/full.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) {
         fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));
         return -1;

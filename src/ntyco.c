@@ -1,15 +1,14 @@
-#include "../NtyCo/core/nty_coroutine.h"
+#include "kvstore.h"
+
 #include <netinet/in.h>
 #include <sys/random.h>
 #include <malloc.h>
 #include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <errno.h> 
-#include <string.h> 
 
-#include "kvstore.h"
+#include <errno.h> 
+
+
+
 #include "rdma.h"
 #include "load_conf.h"
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
@@ -115,7 +114,7 @@ typedef struct {
 
 static send_resp_t g_slave_sr = { .fd = -1, .sending = 0 };
 
-
+// CLOCK_MONOTONIC;
 static uint64_t now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -133,38 +132,6 @@ static void co_sleep_ms(uint64_t ms) {
     while (now_ms() < deadline) {
         nty_coroutine_sleep(0);
     }
-}
-
-
-static int is_write_cmd(const char *data, unsigned len)
-{
-    if (len < 8 || data[0] != '*') return 0;
-
-    const char *p = data;
-    const char *end = data + len;
-
-    while (p < end && *p != '\n') p++;          /* Ìøß^ *N\r\n */
-    if (p >= end) return 0;
-    p++;
-    if (p >= end || *p != '$') return 0;
-
-    int cmd_len = 0;
-    p++;
-    while (p < end && *p >= '0' && *p <= '9') { cmd_len = cmd_len * 10 + (*p - '0'); p++; }
-    if (p + 2 + cmd_len > end) return 0;
-    p += 2;                                      /* Ìøß^ \r\n */
-
-    char cmd[16];
-    if (cmd_len <= 0 || cmd_len >= (int)sizeof(cmd)) return 0;
-    for (int i = 0; i < cmd_len; i++) cmd[i] = (char)toupper((unsigned char)p[i]);
-    cmd[cmd_len] = '\0';
-
-    static const char *w[] = {
-        "SET","MOD","DEL","HSET","HMOD","HDEL","SSET","SMOD","SDEL","RSET","RMOD","RDEL"
-    };
-    for (size_t i = 0; i < sizeof(w)/sizeof(w[0]); i++)
-        if (strcmp(cmd, w[i]) == 0) return 1;
-    return 0;
 }
 
 
@@ -193,9 +160,9 @@ static int rdma_push_stream(uint32_t total)//rdma send
     }
 
 
-    int tmp_fd = open("config/save_mes.tmp", O_RDONLY);
+    int tmp_fd = open("config/full.txt", O_RDONLY);
     if (tmp_fd < 0) {
-        fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));
+        fprintf(stderr, "[sync] open full.txt fail: %s\n", strerror(errno));
         return -1;
     }
     struct stat tmp_st;
@@ -660,7 +627,7 @@ void master_forward_to_slave(const char *data, unsigned len) {//ebpf send
      */
 
     if (!fwd_queueing && !fwd_collecting) return;
-    if (!is_write_cmd(data, len)) return;
+    // if (!is_write_cmd(data, len)) return;
 
 if (!fwd_collecting && handshaking) {
         static int buf_cnt = 0;
@@ -729,35 +696,6 @@ int kvs_sync(void){//recv SYNC
     return 0;
 }
 
-
-// void send_func(void *arg){
-
-//     send_resp_t *sr = arg;
-
-//     while(sr->off < sr->len){
-//         size_t chunk = sr->len - sr->off;
-//         if (chunk > 64 * 1024) chunk = 64 * 1024; 
-
-//         ssize_t n = nty_send(sr->fd, sr->buf + sr->off, chunk, 0);
-//         if(n > 0) {sr->off += (size_t)n; continue;}
-//         if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-//             continue;
-//         }
-//         sr->off = 0;
-//         sr->len = 0;
-//         sr->sending = 0;
-//         if (sr->closed) { nty_close(sr->fd); free(sr->buf); free(sr); }
-//         return;
-//     }
-
-//     if (sr->off >= sr->len) { 
-//         sr->off = 0; 
-//         sr->len = 0; 
-//     }
-
-//     sr->sending = 0;
-
-// }
 
 
 
@@ -951,4 +889,3 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     nty_schedule_run();
     return 0;
 }
-

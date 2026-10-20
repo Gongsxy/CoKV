@@ -21,7 +21,7 @@ void kvs_txt_full_load(char *msg){
     char *key = NULL;
     char *value = NULL;
 
-    char buf[TXT_LENGTH] = {0}; 
+    char buf[1024] = {0}; 
     int status = CMD;
     int key_len = 0;
     int value_len = 0;

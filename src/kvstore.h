@@ -23,23 +23,18 @@
 #include "rdma.h"
 #include "../NtyCo/core/nty_coroutine.h"
 
-
-#define INFO_LENGTH			1024
-#define BUF_LENGTH		1048576
 						
-
 extern int recv_total_length;
 
 struct fd_info {
     char ip[32];
     int fd;
-	char info[INFO_LENGTH];
+	char info[4096];
 	char send_info[4096];
 	int s_len;
 };
 extern struct fd_info *fd_list;
 
-// connection son;
 
 void kvs_conn_ctx_free(int fd);
 int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size);
@@ -52,35 +47,22 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
 typedef int(*msg_handle)(char *msg, int length, char *response);
 
 
-typedef struct kvs_array_items_s{
-    char *key;
-    char *value;
-}kvs_array_items_t;
+// typedef struct kvs_array_items_s{
+//     char *key;
+//     char *value;
+// }kvs_array_items_t;
 
-typedef struct ksv_array_s{
-    kvs_array_items_t *table;
-    int idx;
-    int total;
-}kvs_array_t;
+// typedef struct ksv_array_s{
+//     kvs_array_items_t *table;
+//     int idx;
+//     int total;
+// }kvs_array_t;
+// extern kvs_array_t *globle_array;
 
-
-
-int reactor_start(unsigned short port, msg_handle hand);
 int proactor_start(unsigned short port, msg_handle handle);
 int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma);
 
 
-int kvs_array_create(kvs_array_t *inst);
-int kvs_array_destory(kvs_array_t *inst);
-char * kvs_array_get(kvs_array_t *inst, char *key);
-int kvs_array_set(kvs_array_t *inst, char *key, char *value);
-int kvs_array_del(kvs_array_t *inst, char *key);
-int kvs_array_mod(kvs_array_t *inst, char *key, char *value);
-int kvs_array_exist(kvs_array_t *inst, char *key);
-// int kvs_array_save(kvs_array_t *inst, FILE *fp);
-int kvs_array_save(kvs_array_t *inst, char *msg);
-
-extern kvs_array_t *globle_array;
 
 
 typedef struct hashnode_s {
@@ -116,50 +98,6 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len);
 int kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len);
 int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len);
 
-#endif
-
-int reactor_b_start(const char *ip, unsigned short port, msg_handle hand);
-
-
-#define MAX_LEVEL 8
-
-typedef struct skiplist_node {
-
-    char *key;
-    char *value;
-    int level;
-
-    struct skiplist_node *forward[MAX_LEVEL];
-
-}skiplist_node;
-
-
-typedef struct skiplist {
-
-    int level;
-
-    skiplist_node *header;
-
-}skiplist;
-
-typedef skiplist kvs_skiplist_t;
-
-extern kvs_skiplist_t *globle_skiplist;
-
-int kvs_skiplist_create(kvs_skiplist_t *inst);
-void kvs_skiplist_destroy(kvs_skiplist_t *inst);
-int kvs_skiplist_set(kvs_skiplist_t *inst, char *key, char *value);
-char* kvs_skiplist_get(kvs_skiplist_t *inst, char *key);
-int kvs_skiplist_mod(kvs_skiplist_t *inst, char *key, char *value);
-int kvs_skiplist_del(kvs_skiplist_t *inst, char *key);
-int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key);
-
-
-
-#define TXT_LENGTH	1024
-
-#define FULLSTORAGE     0
-#define ADDSTORAGE      1
 
 int kvs_txt_write(char *cmd, char* key, char* value, int *key_len, int *value_len);
 int kvs_txt_del(char *cmd, char* key, int *key_len);
@@ -167,15 +105,12 @@ int kvs_txt_exist(char *cmd, char* key, int *key_len);
 int kvs_txt_mod(char *cmd, char* key, char* value, int *key_len, int *value_len);
 char * kvs_txt_get(char *cmd, char* key, int *key_len);
 
-void kvs_txt_read(char *cmd, char *key, char *value);
+
 void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len);
 void kvs_txt_full_load(char *msg);
 int kvs_add_save(char *msg);
 
 
-
-
-int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
 
 size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
 int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
@@ -187,3 +122,4 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
 #define KVS_MAX_FORWARD_QUEUE  (2u * KVS_MAX_FRAME + 64u * 1024u)
 
 
+#endif

@@ -8,7 +8,8 @@
 #include "mem_pool.h"
 
 #include "rbtree.h"
-
+#include "skiplist.h"
+#include "array.h"
 
 #include <zlib.h>
 #include <sodium.h>
@@ -66,7 +67,7 @@ enum {
     KVS_CMD_HDEL,
     KVS_CMD_HMOD,
     KVS_CMD_HEXIST,
-// skiptable
+// skiplist
     KVS_CMD_SSET,
     KVS_CMD_SGET,
     KVS_CMD_SDEL,
@@ -180,8 +181,17 @@ static void bgsave_child(const char *tmp_path) {// full save for child
     } else if(strncmp(server_cfg.storage_structure, "hash", 4) == 0) {
         count = (uint32_t)kvs_hash_count(globle_hash);
         len = kvs_hash_save(globle_hash, &buf, &cap, count);
-        if (len == 0 && count > 0) _exit(4);
+    } else if (strncmp(server_cfg.storage_structure, "skiplist", 8) == 0) {
+        count = (uint32_t)kvs_skiplist_count(globle_skiplist);
+        len = kvs_skiplist_save(globle_skiplist, &buf, &cap, count);
+    }else if (strncmp(server_cfg.storage_structure, "array", 5) == 0) {
+        count = (uint32_t)kvs_array_count(globle_array);
+        len = kvs_array_save(globle_array, &buf, &cap, count);
+    } else {
+        _exit(4);
     }
+    
+    if (len == 0) _exit(4);
 
     void *p = realloc(buf, len + MAC_LEN);
     if (!p) _exit(3);
@@ -256,74 +266,57 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
 
     switch(i){
         case KVS_CMD_SET:{
-            ret = kvs_array_set(globle_array,key,value);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR %s\r\n", "unknown command");
-                // printf("ERROR\r\n");
-            }else{  
-                if(server_cfg.show_response == 1) length = sprintf(*response,"+OK\r\n");
-                // printf("EXIST\r\n");
+            if (*value_len > KVS_MAX_VALUE) {
+                if(server_cfg.show_response == 1)
+                    length = sprintf(*response, "-ERR value too large (max 512 MiB)\r\n");
+                break;
             }
+            ret = kvs_array_set(globle_array, key, value, *key_len, *value_len);
+            if(server_cfg.show_response == 1)
+                length = sprintf(*response, ret < 0 ? "-ERR internal error\r\n" : "+OK\r\n");
             break;
         }
-        case KVS_CMD_GET:{       
-            char *result = kvs_array_get(globle_array,key);
+        case KVS_CMD_GET:{
+            char *result = kvs_array_get(globle_array, key, *key_len, value_len);
             if(result == NULL){
                 if(server_cfg.show_response == 1) length = sprintf(*response,"$-1\r\n");
-                // printf("NOT EXIST\r\n");
-            }else{   
-                if(server_cfg.show_response == 1){  
-                    if(*value_len > *resp_length){
-                        void *p = realloc(*response, *resp_length + *value_len + 2);
-                        if(p == NULL){
-                            return -1;
-                        }
-                        *response = p; *resp_length += *value_len + 2; 
-                    }
-                    length  = sprintf(*response, "$%ld\r\n", *value_len);
-                    memcpy(*response + length, result, *value_len);
-                    length += *value_len;
-                    (*response)[length++] = '\r';
-                    (*response)[length++] = '\n';   
+            }else if(server_cfg.show_response == 1){
+                size_t need = *value_len + 32;
+                if(need > *resp_length){
+                    void *p = realloc(*response, need);
+                    if(p == NULL) return -1;
+                    *response = p; *resp_length = need;
                 }
+                length  = sprintf(*response, "$%zu\r\n", *value_len);
+                memcpy(*response + length, result, *value_len);
+                length += *value_len;
+                (*response)[length++] = '\r';
+                (*response)[length++] = '\n';
             }
             break;
         }
         case KVS_CMD_DEL:{
-            ret = kvs_array_del(globle_array,key);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
-            }else if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,":1\r\n");
-                // printf("OK\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,":0\r\n");
-                // printf("NOT EXIST\r\n");
+            ret = kvs_array_del(globle_array, key, *key_len);
+            if(server_cfg.show_response == 1){
+                if(ret == -2)      length = sprintf(*response,"-ERR internal error\r\n");
+                else if(ret == 0)  length = sprintf(*response,":1\r\n");
+                else               length = sprintf(*response,":0\r\n");
             }
             break;
         }
         case KVS_CMD_MOD:{
-            ret = kvs_array_mod(globle_array,key,value);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR internal error\r\n");
-                // printf("ERROR\r\n");
-            }else if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"+OK\r\n");
-                // printf("OK\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR no such key\r\n");
-                // printf("NOT EXIST\r\n");
+            ret = kvs_array_mod(globle_array, key, value, *key_len, *value_len);
+            if(server_cfg.show_response == 1){
+                if(ret < 0)        length = sprintf(*response,"-ERR internal error\r\n");
+                else if(ret == 0)  length = sprintf(*response,"+OK\r\n");
+                else               length = sprintf(*response,"-ERR no such key\r\n");
             }
             break;
         }
         case KVS_CMD_EXIST:{
-            ret = kvs_array_exist(globle_array,key);
-            if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,":1\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,":0\r\n");
-            }
+            ret = kvs_array_exist(globle_array, key, *key_len);
+            if(server_cfg.show_response == 1)
+                length = sprintf(*response, ret == 0 ? ":1\r\n" : ":0\r\n");
             break;
         }
 //rbtree
@@ -474,53 +467,59 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
             }
             break;
         }
+// skiplist
         case KVS_CMD_SSET:{
-            ret = kvs_skiplist_set(globle_skiplist,key,value);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR %s\r\n", "unknown command");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,"+OK\r\n");
+            if (*value_len > KVS_MAX_VALUE) {
+                if(server_cfg.show_response == 1)
+                    length = sprintf(*response, "-ERR value too large (max 512 MiB)\r\n");
+                break;
             }
+            ret = kvs_skiplist_set(globle_skiplist, key, value, *key_len, *value_len);
+            if(server_cfg.show_response == 1)
+                length = sprintf(*response, ret < 0 ? "-ERR internal error\r\n" : "+OK\r\n");
             break;
         }
         case KVS_CMD_SGET:{
-            char *result = kvs_skiplist_get(globle_skiplist,key);
+            char *result = kvs_skiplist_get(globle_skiplist, key, *key_len, value_len);
             if(result == NULL){
                 if(server_cfg.show_response == 1) length = sprintf(*response,"$-1\r\n");
-            }else{          
-                if(server_cfg.show_response == 1) length = sprintf(*response,"$%zu\r\n%s\r\n", strlen(result), result);
+            }else if(server_cfg.show_response == 1){
+                size_t need = *value_len + 32;
+                if(need > *resp_length){
+                    void *p = realloc(*response, need);
+                    if(p == NULL) return -1;
+                    *response = p; *resp_length = need;
+                }
+                length  = sprintf(*response, "$%zu\r\n", *value_len);
+                memcpy(*response + length, result, *value_len);
+                length += *value_len;
+                (*response)[length++] = '\r';
+                (*response)[length++] = '\n';
             }
             break;
         }
         case KVS_CMD_SDEL:{
-            ret = kvs_skiplist_del(globle_skiplist,key);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR internal error\r\n");
-            }else if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,":1\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,":0\r\n");
+            ret = kvs_skiplist_del(globle_skiplist, key, *key_len);
+            if(server_cfg.show_response == 1){
+                if(ret == -2)      length = sprintf(*response,"-ERR internal error\r\n");
+                else if(ret == 0)  length = sprintf(*response,":1\r\n");
+                else               length = sprintf(*response,":0\r\n");
             }
             break;
         }
         case KVS_CMD_SMOD:{
-            ret = kvs_skiplist_mod(globle_skiplist,key,value);
-            if(ret < 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR internal error\r\n");
-            }else if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,"+OK\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,"-ERR no such key\r\n");
+            ret = kvs_skiplist_mod(globle_skiplist, key, value, *key_len, *value_len);
+            if(server_cfg.show_response == 1){
+                if(ret < 0)        length = sprintf(*response,"-ERR internal error\r\n");
+                else if(ret == 0)  length = sprintf(*response,"+OK\r\n");
+                else               length = sprintf(*response,"-ERR no such key\r\n");
             }
             break;
         }
         case KVS_CMD_SEXIST:{
-            ret = kvs_skiplist_exist(globle_skiplist,key);
-            if(ret == 0){
-                if(server_cfg.show_response == 1) length = sprintf(*response,":1\r\n");
-            }else{
-                if(server_cfg.show_response == 1) length = sprintf(*response,":0\r\n");
-            }
+            ret = kvs_skiplist_exist(globle_skiplist, key, *key_len);
+            if(server_cfg.show_response == 1)
+                length = sprintf(*response, ret == 0 ? ":1\r\n" : ":0\r\n");
             break;
         }
         case KVS_CMD_PING:{
@@ -542,9 +541,23 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
         }
         case KVS_CMD_INFO:{
             
+            if (strncmp(server_cfg.storage_structure, "array", 5) == 0) {
+                length = sprintf(*response, "+storage:%s count:%d cap:%zu\r\n",
+                                 server_cfg.storage_structure,
+                                 kvs_array_count(globle_array), globle_array->cap);
+                break;
+            }
+
             if (strncmp(server_cfg.storage_structure, "rbtree", 6) == 0) {
                 length = sprintf(*response, "+storage:%s count:%d\r\n",
                                  server_cfg.storage_structure, kvs_rbtree_count(globle_rbtree));
+                break;
+            }
+
+            if (strncmp(server_cfg.storage_structure, "skiplist", 8) == 0) {
+                length = sprintf(*response, "+storage:%s count:%d level:%d\r\n",
+                                 server_cfg.storage_structure,
+                                 kvs_skiplist_count(globle_skiplist), globle_skiplist->level);
                 break;
             }
 
@@ -559,6 +572,7 @@ int kvs_protocol_filter(char **tokens, char **response, size_t *resp_length, siz
                     (cap > 0) ? (double)n / cap : 0.0, idx_bytes);
                 break;
             }
+            break;
         }
         case KVS_CMD_SAVE:{
             
@@ -1240,49 +1254,57 @@ void dest_kvs(void){
 
 
 
-void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len){
+// void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t value_len){
 
-    if(strcmp(cmd,"SET") == 0){
-        kvs_array_set(globle_array, key, value);
-    }else if(strcmp(cmd,"DEL") == 0){
-        kvs_array_del(globle_array, key);
-    }else if(strcmp(cmd,"MOD") == 0){
-        kvs_array_mod(globle_array, key, value);
-    }else if(strcmp(cmd,"GET") == 0){
-        kvs_array_get(globle_array, key);
-    }else if(strcmp(cmd,"EXIST") == 0){
-        kvs_array_exist(globle_array, key);
-    }
+//     if(strcmp(cmd,"SET") == 0){
+//         kvs_array_set(globle_array, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"DEL") == 0){
+//         kvs_array_del(globle_array, key, key_len);
+//     }else if(strcmp(cmd,"MOD") == 0){
+//         kvs_array_mod(globle_array, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"GET") == 0){
+//         kvs_array_get(globle_array, key, key_len, NULL);
+//     }else if(strcmp(cmd,"EXIST") == 0){
+//         kvs_array_exist(globle_array, key, key_len);
+//     }
 
-
-
-    if(strcmp(cmd,"HSET") == 0){
-        kvs_hash_set(globle_hash, key, value, key_len, value_len);
-    }else if(strcmp(cmd,"HDEL") == 0){
-        kvs_hash_del(globle_hash, key, key_len);
-    }else if(strcmp(cmd,"HMOD") == 0){
-        kvs_hash_mod(globle_hash, key, value, key_len, value_len);
-    }else if(strcmp(cmd,"HGET") == 0){
-        kvs_hash_get(globle_hash, key, key_len, &value_len);
-    }else if(strcmp(cmd,"HEXIST") == 0){
-        kvs_hash_exist(globle_hash, key, key_len);
-    }
+//     if(strcmp(cmd,"HSET") == 0){
+//         kvs_hash_set(globle_hash, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"HDEL") == 0){
+//         kvs_hash_del(globle_hash, key, key_len);
+//     }else if(strcmp(cmd,"HMOD") == 0){
+//         kvs_hash_mod(globle_hash, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"HGET") == 0){
+//         kvs_hash_get(globle_hash, key, key_len, &value_len);
+//     }else if(strcmp(cmd,"HEXIST") == 0){
+//         kvs_hash_exist(globle_hash, key, key_len);
+//     }
 
 
-    if(strcmp(cmd,"SSET") == 0){
-        kvs_skiplist_set(globle_skiplist, key, value);
-    }else if(strcmp(cmd,"SDEL") == 0){
-        kvs_skiplist_del(globle_skiplist, key);
-    }else if(strcmp(cmd,"SMOD") == 0){
-        kvs_skiplist_mod(globle_skiplist, key, value);
-    }else if(strcmp(cmd,"SGET") == 0){
-        kvs_skiplist_get(globle_skiplist, key);
-    }else if(strcmp(cmd,"SEXIST") == 0){
-        kvs_skiplist_exist(globle_skiplist, key);
-    }
+//     if(strcmp(cmd,"SSET") == 0){
+//         kvs_skiplist_set(globle_skiplist, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"SDEL") == 0){
+//         kvs_skiplist_del(globle_skiplist, key, key_len);
+//     }else if(strcmp(cmd,"SMOD") == 0){
+//         kvs_skiplist_mod(globle_skiplist, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"SGET") == 0){
+//         kvs_skiplist_get(globle_skiplist, key, key_len, NULL);
+//     }else if(strcmp(cmd,"SEXIST") == 0){
+//         kvs_skiplist_exist(globle_skiplist, key, key_len);
+//     }
 
-
-}
+//     if(strcmp(cmd,"RSET") == 0){
+//         kvs_rbtree_set(globle_rbtree, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"RDEL") == 0){
+//         kvs_rbtree_del(globle_rbtree, key, key_len);
+//     }else if(strcmp(cmd,"RMOD") == 0){
+//         kvs_rbtree_mod(globle_rbtree, key, value, key_len, value_len);
+//     }else if(strcmp(cmd,"RGET") == 0){
+//         kvs_rbtree_get(globle_rbtree, key, key_len, NULL);
+//     }else if(strcmp(cmd,"REXIST") == 0){
+//         kvs_rbtree_exist(globle_rbtree, key, key_len);
+//     }
+// }
 
 
 #define FULL_HDR_SIZE  16
@@ -1291,7 +1313,7 @@ void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t valu
 #define FULL_OFF_COUNT   12
 #define FULL_OFF_PACKLEN 4
 
-void kvs_add_read(char *cmd, char *key, char *value){
+void kvs_add_read(void){
     
     int fd = open("config/add.txt", O_RDONLY);
     if(fd == -1){
@@ -1357,8 +1379,6 @@ void kvs_add_read(char *cmd, char *key, char *value){
         ok++;
     }
 
-    // fprintf(stderr, "[load] aof replay: ok=%d bad=%d, consumed %zu / %zu bytes\n",
-    //         ok, bad, (size_t)(p - addr), len);
     kvs_conn_ctx_free(fd);
     free(replay_response);
     load_saved_msg = 1;
@@ -1370,19 +1390,15 @@ void kvs_add_read(char *cmd, char *key, char *value){
 
 
 
-void kvs_full_read(char *cmd, char *key, char *value) {
+void kvs_full_read(void) {
+
+    uint32_t loaded = 0, bad = 0, count_hdr = 0;
 
     int fd = open("config/full.txt", O_RDONLY);
     if(fd == -1){
         perror("open a.txt");
         return;
     }
-
-    char *cname = "SET";
-    if (strncmp(server_cfg.storage_structure, "hash", 4) == 0) cname = "HSET";
-    else if (strncmp(server_cfg.storage_structure, "skiplist", 8) == 0) cname = "SSET";
-    else if (strncmp(server_cfg.storage_structure, "array", 5) == 0) cname = "SET";
-    else if (strncmp(server_cfg.storage_structure, "rbtree", 6) == 0) cname = "RSET";
 
     struct stat st;
     if(fstat(fd, &st) < 0){
@@ -1430,7 +1446,7 @@ void kvs_full_read(char *cmd, char *key, char *value) {
         return ;                    
     }
     
-    uint32_t crc_exp, count_hdr, pack_len;
+    uint32_t crc_exp, pack_len;
     memcpy(&crc_exp,   addr + FULL_OFF_CRC, 4);
     memcpy(&count_hdr, addr + FULL_OFF_COUNT, 4);
     memcpy(&pack_len,  addr + FULL_OFF_PACKLEN, 4);
@@ -1458,11 +1474,6 @@ void kvs_full_read(char *cmd, char *key, char *value) {
     char *p = addr + FULL_HDR_SIZE;
     char *end = addr + FULL_HDR_SIZE + pack_len;
 
-    static char s_key[64 * 1024] = {0}; 
-    static char s_value[64 * 1024] = {0};
-
-    uint32_t loaded = 0, bad = 0;
-
     // p += 16;
     while(p + 12 <= end){
         uint32_t crc_single_exp;
@@ -1475,7 +1486,6 @@ void kvs_full_read(char *cmd, char *key, char *value) {
             fprintf(stderr, "[load] bad klen=%u at %zu, stop\n", klen, (size_t)(p - addr));
             goto out;
         }
-        // memcpy(s_key, p + 4, klen);
 
         memcpy(&vlen, p + 4 + klen, 4);
 
@@ -1499,19 +1509,27 @@ void kvs_full_read(char *cmd, char *key, char *value) {
             if (kvs_hash_set(globle_hash, (char *)(p + 4), (char *)(p + 4 + klen + 4), klen, vlen) < 0) {
                 fprintf(stderr, "[load] insert failed at %zu\n", (size_t)(p - addr));
                 goto out;
-            }else if (strncmp(server_cfg.storage_structure, "rbtree", 6) == 0) {
-                if (kvs_rbtree_set(globle_rbtree, (char *)(p + 4), (char *)(p + 4 + klen + 4), klen, vlen) < 0) {
-                    fprintf(stderr, "[load] insert failed at %zu\n", (size_t)(p - addr));
-                    goto out;
-                }
             }
-        } else {
-            memcpy(s_key, p + 4, klen);
-            memcpy(s_value, p + 4 + klen + 4, vlen);
-            s_key[klen] = '\0';
-            s_value[vlen] = '\0';
-            kvs_txt_load(cname, s_key, s_value, klen, vlen);
+        } else if (strncmp(server_cfg.storage_structure, "rbtree", 6) == 0) {
+            if (kvs_rbtree_set(globle_rbtree, (char *)(p + 4), (char *)(p + 4 + klen + 4), klen, vlen) < 0) {
+                fprintf(stderr, "[load] insert failed at %zu\n", (size_t)(p - addr));
+                goto out;
+            }
+        } else if (strncmp(server_cfg.storage_structure, "skiplist", 8) == 0) {
+            if (kvs_skiplist_set(globle_skiplist, (char *)(p + 4), (char *)(p + 4 + klen + 4), klen, vlen) < 0) {
+                fprintf(stderr, "[load] insert failed at %zu\n", (size_t)(p - addr));
+                goto out;
+            }
+        } else if (strncmp(server_cfg.storage_structure, "array", 5) == 0) {
+            if (kvs_array_set(globle_array, (char *)(p + 4), (char *)(p + 4 + klen + 4), klen, vlen) < 0) {
+                fprintf(stderr, "[load] insert failed at %zu\n", (size_t)(p - addr));
+                goto out;
+            }
+        }else {
+            fprintf(stderr, "[load] unknown storage '%s'\n", server_cfg.storage_structure);
+            goto out;
         }
+
         loaded++;
 
         p += 4 + klen + 4 + vlen;
@@ -1582,14 +1600,11 @@ int main(int argc, char const *argv[]){
     fprintf(stderr, "master load finish\n");
 
     init_kvs();
-    char cmd[TXT_LENGTH] = {0};
-    char key[TXT_LENGTH] = {0};
-    char value[TXT_LENGTH] = {0};
     
 
-    if(server_cfg.add_save == 1) kvs_add_read(cmd, key, value);
+    if(server_cfg.add_save == 1) kvs_add_read();
     if(server_cfg.full_save == 1) {
-        kvs_full_read(cmd, key, value);
+        kvs_full_read();
     }
 
     rdma_init(&gr);

@@ -14,6 +14,8 @@
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
 #include "mem_pool.h"
 #include "rbtree.h"
+#include "skiplist.h"
+#include "array.h"
 
 #include <sys/sendfile.h>
 static int sendfile_push_stream(uint32_t total)
@@ -311,8 +313,19 @@ out:
 
 static int sync_mes_to_rdma(char **msg, size_t *size){//save .tmp
     extern kvs_rbtree_t *globle_rbtree;
-    // int ret = kvs_hash_save_slave(globle_hash, msg, size);
-    int ret = kvs_rbtree_save_slave(globle_rbtree, msg, size);
+    extern kvs_skiplist_t *globle_skiplist;
+    extern kvs_array_t *globle_array;
+    int ret = 0;
+    if (strncmp(cfg.storage_structure, "array", 5) == 0){
+        ret = kvs_array_save_slave(globle_array, msg, size);
+    }else if (strncmp(cfg.storage_structure, "rbtree", 6) == 0){
+        ret = kvs_rbtree_save_slave(globle_rbtree, msg, size);
+    }else if (strncmp(cfg.storage_structure, "hash", 4) == 0){
+        ret = kvs_hash_save_slave(globle_hash, msg, size);
+    }else if (strncmp(cfg.storage_structure, "skiplist", 8) == 0){
+        ret = kvs_skiplist_save_slave(globle_skiplist, msg, size);
+    }
+
     if(ret < 0) return -1;
 
     return ret;
@@ -451,7 +464,7 @@ void rdma_handshake(void *arg){
         fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
     }
 
-    fprintf(stderr, "[RDMA-DONE] t=%llu\n", (unsigned long long)now_us());
+    // fprintf(stderr, "[RDMA-DONE] t=%llu\n", (unsigned long long)now_us());
 #else //sendfile
 
     // if(rdma_push_stream((uint32_t)sync_ret) < 0){
@@ -552,13 +565,6 @@ static void slave_send_func(void *arg)//send info in ebpf send
             ssize_t n = nty_send(sr->fd, sendbuf, chunk, 0);
 
             if (n > 0) {
-                
-                static int first = 1;
-    if (first) { first = 0;
-        fprintf(stderr, "[FWD-SEND] first send t=%llu n=%zd\n",
-                (unsigned long long)now_us(), n); }
-
-
                 sr->off += (size_t)n;
                 continue;
             }

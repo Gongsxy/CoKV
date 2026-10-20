@@ -23,32 +23,6 @@
 #include "rdma.h"
 #include "../NtyCo/core/nty_coroutine.h"
 
-// #include "server.h"
-
-#define RED				1
-#define BLACK 			2
-
-#define ENABLE_RBTREE   	1	
-#define ENABLE_ARRAY		1
-#define ENABLE_HASH			1
-#define ENABLE_SKIPTABLE	1
-#define ENABLE_SAVE			1
-
-#define ENABLE_EPOLL		0
-#define ENABLE_URING		1
-#define ENABLE_NTYCO		0
-
-#define STORAGE_ADD			1
-
-#define ENABLE_SEND			1
-
-#define ENABLE_KEY_CHAR	1
-
-#define JEMALLOC			1
-
-#define SHARED				1
-
-#define FD_MAX				128
 
 #define INFO_LENGTH			1024
 #define BUF_LENGTH		1048576
@@ -65,48 +39,16 @@ struct fd_info {
 };
 extern struct fd_info *fd_list;
 
-
-int check_fd_to_ip(int fd, char *ip);
-
 // connection son;
 
 void kvs_conn_ctx_free(int fd);
 int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size);
 
-#if ENABLE_RBTREE
-typedef char * KEY_TYPE;
-
-typedef struct _rbtree_node {
-	unsigned char color;
-	struct _rbtree_node *right;
-	struct _rbtree_node *left;
-	struct _rbtree_node *parent;
-	KEY_TYPE key;
-	void *value;
-} rbtree_node;
-
-typedef struct _rbtree {
-	rbtree_node *root;
-	rbtree_node *nil;
-} rbtree;
-
-typedef rbtree kvs_rbtree_t;
-
-int kvs_rbtree_create(kvs_rbtree_t *inst);
-void kvs_rbtree_destory(kvs_rbtree_t *inst);
-int kvs_rbtree_set(kvs_rbtree_t *inst, char *key, char *value);
-char * kvs_rbtree_get(kvs_rbtree_t *inst, char *key);
-int kvs_rbtree_mod(kvs_rbtree_t *inst, char *key, char *value);
-int kvs_rbtree_del(kvs_rbtree_t *inst, char *key);
-int kvs_rbtree_exist(kvs_rbtree_t *inst, char *key);
-
-#endif
-
 
 #define KVS_ARRAY_SIZE      1048576
 #define KVS_TOKENS_MAX      1048576
 
-#if  ENABLE_ARRAY
+
 typedef int(*msg_handle)(char *msg, int length, char *response);
 
 
@@ -120,7 +62,7 @@ typedef struct ksv_array_s{
     int idx;
     int total;
 }kvs_array_t;
-#endif
+
 
 
 int reactor_start(unsigned short port, msg_handle hand);
@@ -140,21 +82,11 @@ int kvs_array_save(kvs_array_t *inst, char *msg);
 
 extern kvs_array_t *globle_array;
 
-#if ENABLE_HASH
-
-
-
-extern kvs_rbtree_t *globle_rbtree;
 
 typedef struct hashnode_s {
 
-#if ENABLE_HASH
 	char *key;
 	char *value;
-#else
-	char key[MAX_KEY_LEN];
-	char value[MAX_VALUE_LEN];
-#endif
 	int key_len;      
     int value_len;
 	struct hashnode_s *next;
@@ -188,9 +120,6 @@ int kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_
 
 int reactor_b_start(const char *ip, unsigned short port, msg_handle hand);
 
-#if ENABLE_SKIPTABLE
-
-#if ENABLE_SKIPTABLE
 
 #define MAX_LEVEL 8
 
@@ -224,9 +153,9 @@ char* kvs_skiplist_get(kvs_skiplist_t *inst, char *key);
 int kvs_skiplist_mod(kvs_skiplist_t *inst, char *key, char *value);
 int kvs_skiplist_del(kvs_skiplist_t *inst, char *key);
 int kvs_skiplist_exist(kvs_skiplist_t *inst, char *key);
-#endif
 
-#if ENABLE_SAVE
+
+
 #define TXT_LENGTH	1024
 
 #define FULLSTORAGE     0
@@ -243,21 +172,18 @@ void kvs_txt_load(char *cmd, char *key, char *value, size_t key_len, size_t valu
 void kvs_txt_full_load(char *msg);
 int kvs_add_save(char *msg);
 
-// void kvs_txt_load(char *cmd, char *key, char *value);
 
-#endif
+
 
 int kvs_skiplist_save(kvs_skiplist_t *inst, char *msg);
-static void rbtree_save_traversal_fp(kvs_rbtree_t *inst, rbtree_node *node, char *msg);
-int kvs_rbtree_save(kvs_rbtree_t *inst, char *msg);
+
 size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
 int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
 
 
-#define KVS_MAX_VALUE   (512u * 1024u * 1024u)              /* ÑÏ¸ñ 512 MiB */
+#define KVS_MAX_VALUE   (512u * 1024u * 1024u) 
 #define KVS_MAX_FRAME   (KVS_MAX_VALUE + 64u * 1024u)
 #define KVS_RET_DROP    -3
 #define KVS_MAX_FORWARD_QUEUE  (2u * KVS_MAX_FRAME + 64u * 1024u)
 
-#endif
-#endif
+

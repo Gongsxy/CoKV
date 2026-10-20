@@ -13,7 +13,7 @@
 #include "load_conf.h"
 #include "../libbpf-bootstrap/examples/c/resp_capture.h"
 #include "mem_pool.h"
-
+#include "rbtree.h"
 
 #include <sys/sendfile.h>
 static int sendfile_push_stream(uint32_t total)
@@ -77,26 +77,16 @@ out:
 #define FULL_FILENAME   "config/full.txt"
 
 
-char *write_command[] = {
-    "SET","MOD"
-};
-
 static struct mp_pool *pool = NULL;
 static Config cfg = {0};
-static void *s_storage;
 
-
-// static int slave_fd = -1;
-// static int master_fd = -1;
 
 static volatile int rdma_syncing = 0;
-
 static volatile int fwd_collecting = 0;
 static volatile int handshaking = 0;
 
 __g_rdma g_rdma = {0};
 __g_slave g_slave = {.fd = -1};
-// __g_slave g_s_slave = {0};
 
 
 
@@ -160,7 +150,7 @@ static int rdma_push_stream(uint32_t total)//rdma send
     }
 
 
-    int tmp_fd = open("config/full.txt", O_RDONLY);
+    int tmp_fd = open(FULL_FILENAME, O_RDONLY);
     if (tmp_fd < 0) {
         fprintf(stderr, "[sync] open full.txt fail: %s\n", strerror(errno));
         return -1;
@@ -320,9 +310,9 @@ out:
 
 
 static int sync_mes_to_rdma(char **msg, size_t *size){//save .tmp
-    
-    int ret = kvs_hash_save_slave(globle_hash, msg, size);
-
+    extern kvs_rbtree_t *globle_rbtree;
+    // int ret = kvs_hash_save_slave(globle_hash, msg, size);
+    int ret = kvs_rbtree_save_slave(globle_rbtree, msg, size);
     if(ret < 0) return -1;
 
     return ret;

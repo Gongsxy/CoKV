@@ -1,13 +1,11 @@
-#include <stdio.h>
+#include "array.h"
+
+
 #include <string.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <zlib.h>
 
-#include "kvstore.h"
-#include "array.h"
+
 
 
 #ifndef PACK_LEN_OFF
@@ -291,9 +289,9 @@ int kvs_array_save_slave(kvs_array_t *inst, char **msg, size_t *length) {
 
     size_t snap_len = used;
 
-    int fd = open("config/full.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    int fd = open("config/full.tmp", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) {
-        fprintf(stderr, "[sync] open full.txt fail: %s\n", strerror(errno));
+        fprintf(stderr, "[sync] open full.tmp fail: %s\n", strerror(errno));
         return -1;
     } else {
         size_t w = 0;

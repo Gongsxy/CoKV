@@ -1,19 +1,14 @@
-#include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <zlib.h>
+
 
 #include "hash.h"
-#include "load_conf.h"
-#include "mem_pool.h"
-#include "uring_slot.h"
 
 
-typedef struct hashtable_s kvs_hash_t;
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+
+
+
 
 
 #define PACK_LEN_OFF				4
@@ -28,36 +23,8 @@ typedef struct hashtable_s kvs_hash_t;
 
 #define MAX_TABLE_SIZE	1024
 
-
-#if 1
-#include "slab_pool.h"
-static slab_pool_t g_cls_pool[4];
-static const size_t g_cls_size[4] = {64, 128, 256, 512};
-static int g_pools_ready = 0;
-
-static void hash_pools_init(void){
-    if (g_pools_ready) return;
-    for (int i = 0; i < 4; i++) slab_pool_init(&g_cls_pool[i], g_cls_size[i]);
-    g_pools_ready = 1;
-}
-#endif
-
-
-static Config cfg = {0};
-static struct mp_pool *pool;
-void cfg_init(void) {
-    static int done = 0;
-    if (done) return;
-    done = 1;
-
-	load_config("config/server.conf", &cfg);
-    pool = mp_create(4096);
-}
-
-//Connection 
-// 'C' + 'o' + 'n'
 static int _hash(char *key, int key_len, int size) {
-    if (!key || key_len <= 0 || size <= 0) return -1;
+    if (!key || size <= 0) return -1;
 
     unsigned int h = 2166136261u;
     for (int i = 0; i < key_len; i++) {
@@ -66,43 +33,6 @@ static int _hash(char *key, int key_len, int size) {
     }
     return (int)(h % (unsigned int)size);
 }
-
-#if 0
-static hashnode_t *_create_node(char *key, char *value, int key_len, int value_len) {
-
-	cfg_init();
-	hashnode_t *node;
-	node = (hashnode_t*)malloc(sizeof(hashnode_t));
-	if (!node) return NULL;
-	
-	cfg_init();
-
-	node->key = calloc(1, key_len + 1);
-	if(!node->key) {
-		free(node);
-		return NULL;
-	}
-
-	memcpy(node->key, key, key_len);
-	node->key_len = key_len;
-	
-
-	node->value = calloc(1, value_len + 1);
-	// node->value = m_malloc(value_len + 1);
-	if(!node->value) {
-		free(node->key);
-		free(node);
-		return NULL;
-	}
-
-	memcpy(node->value, value, value_len);
-    node->value_len = value_len;
-
-	node->next = NULL;
-
-	return node;
-}
-#endif
 
 
 static hashnode_t *_create_node(char *key, char *value, int key_len, int value_len)
@@ -187,13 +117,7 @@ int kvs_hash_create(kvs_hash_t *hash) {
 
     if (!hash) return -1;
 
-#if 0
-    hash_pools_init();
-#endif
-
 	memset(hash, 0, sizeof(kvs_hash_t));
-
-	cfg_init();
 
 	hash->nodes = (hashnode_t**)calloc(1, sizeof(hashnode_t*) * MAX_TABLE_SIZE);
 	// hash->nodes = (hashnode_t**)m_malloc( sizeof(hashnode_t*) * MAX_TABLE_SIZE);
@@ -234,7 +158,7 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 
     hash->nodes = NULL;
     hash->count = 0;
-	
+	hash->max_slots = 0;
 }
 
 
@@ -284,7 +208,7 @@ int kvs_hash_set(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_
 
 char *kvs_hash_get(kvs_hash_t *hash, char *key, size_t key_len, size_t *value_len) {
 
-	if (!hash || !key || key_len < 0) return NULL;
+	if (!hash || !key) return NULL;
 
 	int idx = _hash(key, key_len, hash->max_slots);
 	if (idx < 0) return NULL;
@@ -308,7 +232,7 @@ int kvs_hash_count(kvs_hash_t *hash) {
 }
 
 int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len) {
-	if (!hash || !key || key_len < 0) return -2;
+	if (!hash || !key) return -2;
 
 	int idx = _hash(key, key_len, hash->max_slots);
     if (idx < 0) return -2;
@@ -486,9 +410,9 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
 
 	size_t snap_len = (size_t)(p - *msg); 
 
-	int fd = open("config/full.txt", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	int fd = open("config/full.tmp", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) {
-        fprintf(stderr, "[sync] open save_mes.tmp fail: %s\n", strerror(errno));
+        fprintf(stderr, "[sync] open full.tmp fail: %s\n", strerror(errno));
         return -1;
     }else {
         size_t w = 0;

@@ -1,7 +1,18 @@
+
+
 #include "kvstore.h"
+#include "rdma.h"
+#include "load_conf.h"
+
+//  #include "../libbpf-bootstrap/examples/c/resp_capture.h"
+
+#include "../storage/storage.h"
+#include "ringbuf.h"
 
 #include <netinet/in.h>
-#include <sys/random.h>
+
+ #include <sys/random.h>
+
 #include <malloc.h>
 #include <fcntl.h>
 
@@ -9,22 +20,58 @@
 
 
 
-#include "rdma.h"
-#include "load_conf.h"
-#include "../libbpf-bootstrap/examples/c/resp_capture.h"
-#include "mem_pool.h"
-#include "rbtree.h"
-#include "skiplist.h"
-#include "array.h"
-
 #include <sys/sendfile.h>
+
+
+#define FULL_FILE_TMP   "config/full.tmp"
+
+
+#define EBPF        0
+
+
+static Config cfg = {0};
+
+
+static volatile int rdma_syncing = 0;
+static volatile int fwd_collecting = 0;
+static volatile int fwd_queueing = 0;
+
+
+static volatile int handshaking = 0;
+
+__g_rdma g_rdma = {0};
+__g_slave g_slave = {.fd = -1};
+
+
+
+#if EBPF
+typedef struct {
+    int    fd;
+    char  *buf;        
+    size_t len;       
+    size_t off;    
+    int    sending;    
+    int    closed;  
+    int    want; 
+    size_t cap;
+} send_resp_t;
+
+
+static send_resp_t g_slave_sr = { .fd = -1, .sending = 0 };
+
+static void slave_send_func(void *arg);
+extern int resp_capture_poll(int max_records);
+void master_forward_to_slave(const char *data, unsigned len);
+
+#endif
+
 static int sendfile_push_stream(uint32_t total)
 {
     if (g_slave.fd < 0) { fprintf(stderr, "[sf] no slave conn\n"); return -1; }
 
-    int tmp_fd = open("config/save_mes.tmp", O_RDONLY);
+    int tmp_fd = open(FULL_FILE_TMP, O_RDONLY);
     if (tmp_fd < 0) {
-        fprintf(stderr, "[sf] open save_mes.tmp fail: %s\n", strerror(errno));
+        fprintf(stderr, "[sf] open full.txt fail: %s\n", strerror(errno));
         return -1;
     }
 
@@ -58,8 +105,6 @@ static int sendfile_push_stream(uint32_t total)
         goto out;
     }
 
-    fprintf(stderr, "[sf] sent=%zu / total=%u\n", sent, total);
-
     
     {
         uint32_t st_net;
@@ -75,243 +120,9 @@ out:
     return rc;
 }
 
-#define ADD_FILENAME    "config/add.txt"
-#define FULL_FILENAME   "config/full.txt"
 
 
-static struct mp_pool *pool = NULL;
-static Config cfg = {0};
-
-
-static volatile int rdma_syncing = 0;
-static volatile int fwd_collecting = 0;
-static volatile int handshaking = 0;
-
-__g_rdma g_rdma = {0};
-__g_slave g_slave = {.fd = -1};
-
-
-
-typedef struct {
-    int    fd;
-    char  *buf;        
-    size_t len;       
-    size_t off;    
-    int    sending;    
-    int    closed;  
-    int    want; 
-    size_t cap;
-} send_resp_t;
-
-
-static send_resp_t g_slave_sr = { .fd = -1, .sending = 0 };
-
-// CLOCK_MONOTONIC;
-static uint64_t now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-}
-
-static uint64_t now_us(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000ull;
-}
-
-static void co_sleep_ms(uint64_t ms) {
-    uint64_t deadline = now_ms() + ms;
-    while (now_ms() < deadline) {
-        nty_coroutine_sleep(0);
-    }
-}
-
-
-extern int resp_capture_poll(int max_records);
-void master_forward_to_slave(const char *data, unsigned len);
-
-
-
-static int rdma_push_stream(uint32_t total)//rdma send
-{
-
-    uint32_t chunk_max = (uint32_t)g_rdma.buf_size;
-    if (chunk_max == 0) { fprintf(stderr, "[push] rdma buf_size == 0\n"); return -1; }
-    if (g_slave.fd < 0) { fprintf(stderr, "[push] no slave conn\n");       return -1; }
-
-    void *map = MAP_FAILED;
-    uint32_t off = 0;
-    int rc = -1;
-    struct ibv_mr *mr = NULL;
-
-    if (total == 0) {
-        if (rdma_notify_slave(&g_slave, 0) < 0) return -1;
-        uint32_t st0;
-        if (nty_recv(g_slave.fd, &st0, sizeof(st0), 0) != (ssize_t)sizeof(st0)) return -1;
-        return (ntohl(st0) == 1) ? 0 : -1;
-    }
-
-
-    int tmp_fd = open(FULL_FILENAME, O_RDONLY);
-    if (tmp_fd < 0) {
-        fprintf(stderr, "[sync] open full.txt fail: %s\n", strerror(errno));
-        return -1;
-    }
-    struct stat tmp_st;
-    if(fstat(tmp_fd, &tmp_st) != 0){
-        fprintf(stderr, "open tmp failed\n");
-        close(tmp_fd); 
-        return -1;
-    }
-
-    if ((uint32_t)tmp_st.st_size != total) {
-        fprintf(stderr, "[push] size mismatch: file=%ld total=%u\n", (long)tmp_st.st_size, total);
-        goto out;
-    }
-
-    map = mmap(NULL, tmp_st.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, tmp_fd, 0);
-    if (map == MAP_FAILED) { perror("mmap"); goto out; }
-
-    close(tmp_fd); tmp_fd = -1;
-
-    mr = ibv_reg_mr(g_rdma.pd, (char *)map, total, 0);
-    if (!mr) { 
-        fprintf(stderr, "[push] reg_mr(total=%u) fail: %s\n",  total, strerror(errno)); 
-        goto out; 
-    }
-
-
-    if (total <= chunk_max) {
-        struct ibv_sge sge = {
-            .addr   = (uint64_t)map,
-            .length = total,
-            .lkey   = mr->lkey,
-        };
-        struct ibv_send_wr wr = {0};
-        wr.wr_id      = 0;
-        wr.opcode     = IBV_WR_RDMA_WRITE;
-        wr.send_flags = IBV_SEND_SIGNALED;
-        wr.num_sge    = 1;
-        wr.sg_list    = &sge;
-        wr.wr.rdma.remote_addr = g_slave.remote_vaddr;
-        wr.wr.rdma.rkey        = g_slave.remote_rkey;
-
-        struct ibv_send_wr *bad_wr = NULL;
-        if (ibv_post_send(g_rdma.qp, &wr, &bad_wr) != 0) {
-            perror("ibv post send error"); goto out;
-        }
-
-
-        {
-            struct ibv_wc wc = {0};
-            int n;
-            while ((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0)
-                nty_coroutine_sleep(0);
-            if (n < 0 || wc.status != IBV_WC_SUCCESS) {
-                fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
-                goto out;
-            }
-        }
-
-
-        if (rdma_notify_slave(&g_slave, total) < 0) goto out;
-        {
-            uint32_t ack;
-            if (nty_recv(g_slave.fd, &ack, sizeof(ack), 0) != (ssize_t)sizeof(ack)) goto out;
-        }
-
-        if (rdma_notify_slave(&g_slave, 0) < 0) goto out;
-        {
-            uint32_t st;
-            if (nty_recv(g_slave.fd, &st, sizeof(st), 0) != (ssize_t)sizeof(st)) goto out;
-            rc = (ntohl(st) == 1) ? 0 : -1;
-        }
-    }else{
-        while (off < total) {
-            uint32_t chunk = total - off;
-            if (chunk > chunk_max) chunk = chunk_max;
-
-            struct ibv_sge sge = {
-                .addr   = (uint64_t)((char *)map + off),
-                .length = chunk,
-                .lkey   = mr->lkey,
-            };
-
-            struct ibv_send_wr wr = {0};
-            wr.wr_id      = off;
-            wr.opcode     = IBV_WR_RDMA_WRITE;
-            wr.send_flags = IBV_SEND_SIGNALED;
-            wr.num_sge    = 1;
-            wr.sg_list    = &sge;
-            wr.wr.rdma.remote_addr = g_slave.remote_vaddr;
-            wr.wr.rdma.rkey        = g_slave.remote_rkey;
-
-            struct ibv_send_wr *bad_wr = NULL;
-            if (ibv_post_send(g_rdma.qp, &wr, &bad_wr) != 0) {
-                perror("ibv post send error");
-                goto out;
-            }
-
-            {
-                struct ibv_wc wc = {0};
-                // uint64_t cq_start = now_ms();
-                int n;
-
-                while ((n = ibv_poll_cq(g_rdma.cq, 1, &wc)) == 0) {
-                    // if (now_ms() - cq_start > 3000) {
-                    //     fprintf(stderr, "[push] poll cq timeout off=%u\n", off);
-                    //     goto out;
-                    // }
-                    nty_coroutine_sleep(0);
-                }
-                if (n < 0 || wc.status != IBV_WC_SUCCESS) {
-                    fprintf(stderr, "rdma write fail: %s\n", ibv_wc_status_str(wc.status));
-                    goto out;
-                }
-            }
-
-            if (rdma_notify_slave(&g_slave, chunk) < 0) {
-                fprintf(stderr, "[push] notify fail off=%u\n", off);
-                goto out;
-            }
-
-            {
-                uint32_t ack;
-                if (nty_recv(g_slave.fd, &ack, sizeof(ack), 0) != (ssize_t)sizeof(ack)) {
-                    fprintf(stderr, "[push] wait ack fail off=%u\n", off);
-                    goto out;
-                }
-            }
-
-            off += chunk;
-        }
-    
-
-        if (rdma_notify_slave(&g_slave, 0) < 0) {
-            fprintf(stderr, "[push] notify(0) fail\n");
-            goto out;
-        }
-
-        {
-            uint32_t st;
-            if (nty_recv(g_slave.fd, &st, sizeof(st), 0) != (ssize_t)sizeof(st)) {
-                fprintf(stderr, "[push] read final status fail\n");
-                goto out;
-            }
-            rc = (ntohl(st) == 1) ? 0 : -1;
-        }
-    }
-
-out:
-    if (mr) ibv_dereg_mr(mr);
-    if (map != MAP_FAILED) munmap(map, total);
-    if (tmp_fd >= 0) close(tmp_fd);
-    return rc;
-}
-
-
-
-static int sync_mes_to_rdma(char **msg, size_t *size){//save .tmp
+static int repl_make_snapshot(char **msg, size_t *size){//save .tmp
     extern kvs_rbtree_t *globle_rbtree;
     extern kvs_skiplist_t *globle_skiplist;
     extern kvs_array_t *globle_array;
@@ -333,10 +144,243 @@ static int sync_mes_to_rdma(char **msg, size_t *size){//save .tmp
 
 
 
-static void slave_send_func(void *arg);
-static volatile int fwd_queueing = 0;
+static void repl_sender_func(void *arg)
+{
+    int fd = g_slave.fd;
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-void rdma_handshake(void *arg){
+    for(;;){
+
+        if(g_slave.fd != fd) break;
+
+        char *p;
+        size_t n = ringbuf_peek(&g_ring, &p);
+
+        if(n == 0){
+
+            g_sender_waiting = 1;
+
+            uint64_t v;
+            read(g_repl_efd, &v, sizeof(v));
+            g_sender_waiting = 0;
+            continue;
+
+        }
+
+        if(n > 64 * 1024) n = 64 * 1024;
+        ssize_t s = nty_send(fd, p, n, 0);
+
+        if(s > 0){
+            ringbuf_consume(&g_ring, s);
+            continue;
+        }
+
+        if (s < 0 && errno == EINTR) continue;
+
+        fprintf(stderr, "[repl] send to slave failed: %s\n", strerror(errno));
+        break;
+    }
+
+    if(g_slave.fd == fd){
+        nty_close(fd);
+        g_slave.fd = -1;
+
+    }
+
+    g_repl_collect = 0;
+}
+
+
+#if 0
+// void rdma_handshake(void *arg){
+
+//     int rc = -1;
+//     int fd = -1;
+//     char *mes = NULL;
+//     size_t mes_size = 0;
+//     int sync_ret = 0;
+
+
+//     if (g_slave.fd >= 0) nty_close(g_slave.fd);
+//     g_slave.fd = -1;
+//     g_slave_sr.fd  = -1;
+
+
+//     g_slave_sr.len = 0;
+//     g_slave_sr.off = 0;
+//     fwd_collecting = 0;
+
+//     mes_size = 1024 * 1024;
+//     mes = malloc(mes_size);
+//     if(!mes){ perror("mes malloc"); goto out; }
+
+//     // fwd_queueing = 1;
+
+
+//     g_ring.send_off = g_ring.write_off;
+//     g_repl_collect = 1;
+
+
+//     sync_ret = sync_mes_to_rdma(&mes, &mes_size);
+//     if(sync_ret < 0){ fprintf(stderr, "sync message error\n"); goto out; }
+//     // printf("master snapshot=%d bytes\n", sync_ret);
+
+
+//     fprintf(stderr, "master snapshot=%d bytes\n", sync_ret);
+    
+//     free(mes);
+//     mes = NULL;
+
+
+
+//     fd = nty_socket(AF_INET, SOCK_STREAM, 0);
+
+//     if(fd < 0){
+//         perror("nty socket error");
+//         goto out;
+//     }
+//     g_slave.fd = fd;
+
+//     struct sockaddr_in addr;
+//     memset(&addr, 0, sizeof(addr));
+//     addr.sin_family = AF_INET;
+//     addr.sin_port = htons(9998);
+//     addr.sin_addr.s_addr = INADDR_ANY;
+
+//     if(inet_pton(AF_INET, cfg.sync_ip, &addr.sin_addr) != 1){
+//         fprintf(stderr, "[rdma] cfg.sync_ip not IPv4\n");
+//         goto out;
+//     }
+
+//     if (nty_connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+//         fprintf(stderr, "[sync] connect %s:9998 fail: %s\n", cfg.sync_ip, strerror(errno));
+//         goto out;
+//     }  
+
+
+// #if 0
+//     g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
+
+//     union ibv_gid local_gid;
+//     if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
+//         perror("ibv query gid error"); goto out;
+//     }
+
+//     uint32_t local_psn;
+//     if(getrandom(&local_psn, sizeof(local_psn), 0) != sizeof(local_psn)){
+//         perror("getrandom error"); goto out;
+//     }
+//     local_psn &= 0xffffff;
+
+
+//     struct { 
+//         uint32_t qpn; 
+//         uint32_t psn; 
+//         union ibv_gid gid; 
+//     }__attribute__((packed)) local_short;
+//     local_short.gid = local_gid;
+//     local_short.psn = htonl(local_psn);
+//     local_short.qpn = htonl(g_rdma.qp->qp_num);
+
+//     if(nty_send(fd, &local_short, sizeof(local_short), 0) != (ssize_t)sizeof(local_short)){
+//         perror("nty send error"); goto out;
+//     }
+
+//     struct { 
+//         uint32_t qpn; 
+//         uint32_t psn; 
+//         uint32_t rkey;
+//         uint64_t vaddr; 
+//         union ibv_gid gid; 
+//     }__attribute__((packed)) remote_full;
+
+        
+//     if(nty_recv(fd, &remote_full, sizeof(remote_full), 0) != (ssize_t)sizeof(remote_full)){
+//         perror("rdma nty recv error"); goto out;
+//     }
+
+//     g_slave.remote_qpn   = ntohl(remote_full.qpn);
+//     g_slave.remote_psn   = ntohl(remote_full.psn);
+//     g_slave.remote_rkey  = ntohl(remote_full.rkey);
+//     g_slave.remote_vaddr = be64toh(remote_full.vaddr);
+//     g_slave.remote_gid   = remote_full.gid;
+
+//     if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn,
+//                     g_rdma.gid_index) != 0){
+//         fprintf(stderr, "modify fail\n"); goto out;
+//     }
+
+//     if(rdma_push_stream((uint32_t)sync_ret) < 0){
+//         fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
+//     }
+
+//     // fprintf(stderr, "[RDMA-DONE] t=%llu\n", (unsigned long long)now_us());
+// #else //sendfile
+
+//     {
+//         uint32_t total_net = htonl((uint32_t)sync_ret);
+//         if (nty_send(fd, &total_net, sizeof(total_net), 0) != (ssize_t)sizeof(total_net)) {
+//             fprintf(stderr, "[sync] send total fail\n");
+//             goto out;
+//         }
+//     }
+
+
+//     int pr = sendfile_push_stream((uint32_t)sync_ret);
+//     if(pr < 0){
+//         fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
+//     }
+
+//     nty_coroutine *sender_co;
+//     if(nty_coroutine_create(&sender_co, repl_sender_func, NULL) != 0){
+//         fprintf(stderr, "[repl] create sender failed\n");
+//         goto out;
+//     }
+    
+
+//     fprintf(stderr, "[push] size=%d B\n", sync_ret);
+
+// #endif
+
+
+//     fprintf(stderr, "master snapshot pushed ok\n");
+
+
+//     rc = 0;
+//     // g_slave_sr.fd = fd;
+//     // rdma_syncing = 1;
+//     // fwd_collecting = 1;
+
+//     // if (g_slave_sr.len > g_slave_sr.off && !g_slave_sr.sending) {
+//     //     g_slave_sr.sending = 1;
+//     //     g_slave_sr.want = 0;
+//     //     nty_coroutine *co;
+//     //     nty_coroutine_create(&co, slave_send_func, NULL);
+//     // }
+    
+// out:
+//     free(mes);
+//     if(rc < 0){
+//         g_repl_collect = 0;
+//         // rdma_syncing = 0;
+//         // fwd_collecting = 0;
+//         if (fd >= 0 && g_slave.fd == fd){ 
+//             nty_close(fd);
+//             g_slave.fd = -1;
+//         }
+//         // g_slave_sr.fd = -1;
+//         // g_slave_sr.len = 0;
+//         // g_slave_sr.off = 0;
+//     }
+//     handshaking = 0;
+//     return;
+    
+// }
+#endif
+
+
+void sendfile_full_sync(void *arg){
 
     int rc = -1;
     int fd = -1;
@@ -347,24 +391,25 @@ void rdma_handshake(void *arg){
 
     if (g_slave.fd >= 0) nty_close(g_slave.fd);
     g_slave.fd = -1;
-    g_slave_sr.fd  = -1;
-
-
-    g_slave_sr.len = 0;
-    g_slave_sr.off = 0;
-    fwd_collecting = 0;
 
     mes_size = 1024 * 1024;
     mes = malloc(mes_size);
     if(!mes){ perror("mes malloc"); goto out; }
 
-    fwd_queueing = 1;
 
-    sync_ret = sync_mes_to_rdma(&mes, &mes_size);
+#if EBPF
+    g_slave_sr.fd  = -1;
+    g_slave_sr.len = g_slave_sr.off = 0;
+    fwd_collecting = 0;
+    fwd_queueing   = 1;          // 沒有這行，master_forward_to_slave 會直接 return
+    #else
+    g_ring.send_off = g_ring.write_off;
+    g_repl_collect  = 1;         // eBPF 模式下設成 1，ringbuf 沒人消費，塞滿後用戶端會被斷線
+#endif
+
+
+    sync_ret = repl_make_snapshot(&mes, &mes_size);
     if(sync_ret < 0){ fprintf(stderr, "sync message error\n"); goto out; }
-    // printf("master snapshot=%d bytes\n", sync_ret);
-
-    fprintf(stderr, "master snapshot=%d bytes\n", sync_ret);
     
     free(mes);
     mes = NULL;
@@ -382,10 +427,9 @@ void rdma_handshake(void *arg){
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(9998);
-    addr.sin_addr.s_addr = INADDR_ANY;
 
     if(inet_pton(AF_INET, cfg.sync_ip, &addr.sin_addr) != 1){
-        fprintf(stderr, "[rdma] cfg.sync_ip not IPv4\n");
+        fprintf(stderr, "[sync] cfg.sync_ip not IPv4\n");
         goto out;
     }
 
@@ -393,87 +437,6 @@ void rdma_handshake(void *arg){
         fprintf(stderr, "[sync] connect %s:9998 fail: %s\n", cfg.sync_ip, strerror(errno));
         goto out;
     }  
-
-#if 0 //sendfile
-
-    {
-        char mode = 'S';                       /* sendfile  */
-        if (nty_send(fd, &mode, 1, 0) != 1) {
-            fprintf(stderr, "[sync] send mode fail\n");
-            goto out;
-        }
-    }
-
-#endif
-
-    // union ibv_gid local_gid;
-    // fprintf(stderr, "[rdma] connected to %s:9998 fd=%d\n", cfg.sync_ip, fd);
-#if 1
-    g_rdma.gid_index = pick_rocev2_gid_index(g_rdma.ctx, 1);
-
-    union ibv_gid local_gid;
-    if(ibv_query_gid(g_rdma.ctx, 1, g_rdma.gid_index, &local_gid) != 0){
-        perror("ibv query gid error"); goto out;
-    }
-
-    uint32_t local_psn;
-    if(getrandom(&local_psn, sizeof(local_psn), 0) != sizeof(local_psn)){
-        perror("getrandom error"); goto out;
-    }
-    local_psn &= 0xffffff;
-
-
-    struct { 
-        uint32_t qpn; 
-        uint32_t psn; 
-        union ibv_gid gid; 
-    }__attribute__((packed)) local_short;
-    local_short.gid = local_gid;
-    local_short.psn = htonl(local_psn);
-    local_short.qpn = htonl(g_rdma.qp->qp_num);
-
-    if(nty_send(fd, &local_short, sizeof(local_short), 0) != (ssize_t)sizeof(local_short)){
-        perror("nty send error"); goto out;
-    }
-
-    struct { 
-        uint32_t qpn; 
-        uint32_t psn; 
-        uint32_t rkey;
-        uint64_t vaddr; 
-        union ibv_gid gid; 
-    }__attribute__((packed)) remote_full;
-
-        
-    if(nty_recv(fd, &remote_full, sizeof(remote_full), 0) != (ssize_t)sizeof(remote_full)){
-        perror("rdma nty recv error"); goto out;
-    }
-
-    g_slave.remote_qpn   = ntohl(remote_full.qpn);
-    g_slave.remote_psn   = ntohl(remote_full.psn);
-    g_slave.remote_rkey  = ntohl(remote_full.rkey);
-    g_slave.remote_vaddr = be64toh(remote_full.vaddr);
-    g_slave.remote_gid   = remote_full.gid;
-
-    if(rdma_modify(g_rdma.qp, local_psn, g_slave.remote_qpn, &g_slave.remote_gid, g_slave.remote_psn,
-                    g_rdma.gid_index) != 0){
-        fprintf(stderr, "modify fail\n"); goto out;
-    }
-
-    if(rdma_push_stream((uint32_t)sync_ret) < 0){
-        fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
-    }
-
-    // fprintf(stderr, "[RDMA-DONE] t=%llu\n", (unsigned long long)now_us());
-#else //sendfile
-
-    // if(rdma_push_stream((uint32_t)sync_ret) < 0){
-    //     fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
-    // }
-
-
-    uint64_t t_push0 = now_us();
-    // int pr = rdma_push_stream((uint32_t)sync_ret);
 
 
     {
@@ -489,52 +452,59 @@ void rdma_handshake(void *arg){
     if(pr < 0){
         fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
     }
-    uint64_t t_push1 = now_us();
-    double sec  = (t_push1 - t_push0) / 1e6;
-    double gbps = (sync_ret * 8.0) / sec / 1e9;
-    double mbs  = sync_ret / sec / (1024.0 * 1024.0);
-    fprintf(stderr, "[push] size=%d B  time=%.3f s  bw=%.3f Gbit/s (%.1f MB/s)\n",
-            sync_ret, sec, gbps, mbs);
+
+#if EBPF
+g_slave_sr.fd  = fd;
+rdma_syncing   = 1;          // 沒有這行，slave_send_func 一進迴圈就退出
+fwd_collecting = 1;
+if (g_slave_sr.len > g_slave_sr.off && !g_slave_sr.sending) {
+    g_slave_sr.sending = 1;
+    g_slave_sr.want = 0;
+    nty_coroutine *co;
+    nty_coroutine_create(&co, slave_send_func, NULL);
+}
+#else
+
+    nty_coroutine *sender_co;
+    if (nty_coroutine_create(&sender_co, repl_sender_func, NULL) != 0) {
+        fprintf(stderr, "[repl] create sender failed\n");
+        goto out;
+    }
 
 #endif
 
 
-    fprintf(stderr, "master snapshot pushed ok\n");
+    fprintf(stderr, "master snapshot pushed size=%d B ok\n", sync_ret);
 
 
     rc = 0;
-    g_slave_sr.fd = fd;
-    rdma_syncing = 1;
-    fwd_collecting = 1;
-
-    if (g_slave_sr.len > g_slave_sr.off && !g_slave_sr.sending) {
-        g_slave_sr.sending = 1;
-        g_slave_sr.want = 0;
-        nty_coroutine *co;
-        nty_coroutine_create(&co, slave_send_func, NULL);
-    }
     
 out:
     free(mes);
     if(rc < 0){
-        rdma_syncing = 0;
-        fwd_collecting = 0;
+#if EBPF
+    rdma_syncing = fwd_collecting = fwd_queueing = 0;
+    g_slave_sr.fd = -1;
+    g_slave_sr.len = g_slave_sr.off = 0;
+#else
+
+        g_repl_collect = 0;
+
+#endif
+
         if (fd >= 0 && g_slave.fd == fd){ 
             nty_close(fd);
             g_slave.fd = -1;
         }
-        g_slave_sr.fd = -1;
-        g_slave_sr.len = 0;
-        g_slave_sr.off = 0;
-    }
 
+    }
     handshaking = 0;
     return;
     
 }
 
 
-
+#if EBPF // ebpf
 static void slave_send_func(void *arg)//send info in ebpf send 
 {
     send_resp_t *sr = &g_slave_sr;
@@ -625,14 +595,6 @@ void master_forward_to_slave(const char *data, unsigned len) {//ebpf send
     if (!fwd_queueing && !fwd_collecting) return;
     // if (!is_write_cmd(data, len)) return;
 
-if (!fwd_collecting && handshaking) {
-        static int buf_cnt = 0;
-        if (++buf_cnt <= 5 || buf_cnt % 100 == 0) {
-            fprintf(stderr, "[BUFFERED] t=%llu len=%u pending=%zu n=%d\n",
-                    (unsigned long long)now_us(), len,
-                    g_slave_sr.len + len, buf_cnt);
-        }
-    }
 
 
     if (g_slave.fd >= 0) g_slave_sr.fd = g_slave.fd;
@@ -674,7 +636,7 @@ if (!fwd_collecting && handshaking) {
     }
 
 }
-
+#endif
 
 int kvs_sync(void){//recv SYNC 
 
@@ -685,7 +647,7 @@ int kvs_sync(void){//recv SYNC
     fwd_collecting = 0;
     rdma_syncing = 0;
     fwd_queueing   = 0;
-    if(nty_coroutine_create(&co, rdma_handshake, NULL) != 0){
+    if(nty_coroutine_create(&co, sendfile_full_sync, NULL) != 0){
         handshaking = 0;
         return -1;
     }
@@ -709,48 +671,50 @@ void read_func(void *arg){
     char *buf = NULL; char *response = NULL;
 
     size_t response_cap = 1024 * 64;
-    if(cfg.use_mempool == 1){
-        buf = mp_alloc(pool, 64 * 1024);
-        response = mp_alloc(pool, 1024 * 1024 * 1);
-    }else {
-        buf = calloc(1, 64 * 1024);
-        response = calloc(1, response_cap);
-    }
+    buf = calloc(1, 64 * 1024);
+    response = calloc(1, response_cap);
+    
 
     if (!buf || !response) {
         nty_close(cli_fd);
-        if(cfg.use_mempool == 1){
-            mp_large_free(pool, buf);
-            mp_large_free(pool, response);
-        }else{
-            free(buf); 
-            free(response);
-        }
+
+        free(buf); 
+        free(response);
+        
         buf = NULL; 
         response = NULL;
         return ;
     }
-    
+
+#if EBPF
     send_resp_t *sr = calloc(1, sizeof(send_resp_t));;
     if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
     sr->fd = cli_fd;
-
+#endif
     while(1){
 
         int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
 
-        if (recv_len == 0) { resp_capture_poll(0); break; }
+        if (recv_len == 0) { 
+#if EBPF
+            resp_capture_poll(0); 
+#endif
+            break; 
+        }
 
         if (recv_len < 0) {
+#if EBPF
             resp_capture_poll(0);
+#endif
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
             perror("nty_recv");
             break;
         }
 
         int length = kvs_protocol(cli_fd, buf, recv_len, &response, &response_cap);
+#if EBPF
         resp_capture_poll(0);
-
+#endif
         if (length < 0) {
             goto out;
         }
@@ -775,18 +739,20 @@ void read_func(void *arg){
         }
 
         
-        static uint64_t last_trim_ms = 0;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t cur_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        if (cur_ms - last_trim_ms >= 1000) {        
-            last_trim_ms = cur_ms;
-            malloc_trim(0);
-        }
+        // static uint64_t last_trim_ms = 0;
+        // struct timespec ts;
+        // clock_gettime(CLOCK_MONOTONIC, &ts);
+        // uint64_t cur_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
+        // if (cur_ms - last_trim_ms >= 1000) {        
+        //     last_trim_ms = cur_ms;
+        //     malloc_trim(0);
+        // }
         
     }
 
 out:
+
+#if EBPF
     if (sr) {
         sr->closed = 1;
         if (!sr->sending) {
@@ -795,7 +761,7 @@ out:
         }
         sr = NULL;
     }
-
+#endif
     kvs_conn_ctx_free(cli_fd);
     nty_close(cli_fd);
 
@@ -830,7 +796,7 @@ void accept_func(void *arg){
         return;
     }
 
-    int listen_ret = listen(fd, 10);
+    int listen_ret = listen(fd, 50);
     if(listen_ret < 0){
         perror("listen error");
         nty_close(fd);
@@ -871,14 +837,12 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     int *p = calloc(1, sizeof(int));  if(!p){ return -1; } *p = cfg.port;
     g_rdma = *g_m_rdma;
 
-    if(cfg.use_mempool == 1){
-        pool = mp_create(64);
-    }
+#if EBPF
     if (ringbuf_init() < 0) {
         fprintf(stderr, "ringbuf_init failed\n");
         return -1;
     }
-
+#endif
 
     nty_coroutine_create(&co, accept_func, p);
     

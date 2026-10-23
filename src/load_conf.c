@@ -19,7 +19,6 @@ int load_config(const char *filename, Config *cfg){
    
     strcpy(cfg->ip, "0.0.0.0");
     cfg->port = 2000;             
-    cfg->mode = 1;
 
     int status = -1;
     char line[128] = {0};
@@ -81,23 +80,11 @@ int load_config(const char *filename, Config *cfg){
                 if (!val) break;
                 while (*val == ' ') val++;
 
-                if(strcmp(mes, "mode") == 0){
-                    cfg->mode = atoi(val);
-                }
                 if(strcmp(mes, "full_save") == 0){
                     cfg->full_save = atoi(val);
                 }
                 if(strcmp(mes, "add_save") == 0){
                     cfg->add_save = atoi(val);
-                }
-                if(strcmp(mes, "full_save_flag") == 0){
-                    cfg->full_save_flag = atoi(val);
-                }
-                if(strcmp(mes, "get_old_mes_flag") == 0){
-                    cfg->get_old_mes_flag = atoi(val);
-                }
-                if(strcmp(mes, "load_old_mes") == 0){
-                    cfg->load_old_mes = atoi(val);
                 }
                 if(strcmp(mes, "storage_structure") == 0){
                     strncpy(cfg->storage_structure, val, sizeof(cfg->storage_structure) - 1);
@@ -121,16 +108,12 @@ int load_config(const char *filename, Config *cfg){
                     cfg->sync_ip[strlen(val)] = '\0';
                     i++;
                 }
-                if(strcmp(mes, "push_flag") == 0){
-                    cfg->push_flag = atoi(val);
-                }
                 if(strcmp(mes, "is_salve") == 0){
                     cfg->is_slave = atoi(val);
                 }
-                if(strcmp(mes, "push_save_flag") == 0){
-                    cfg->push_save_flag = atoi(val);
+                if(strcmp(mes, "method") == 0){
+                    cfg->method = atoi(val);
                 }
-                
             }
         }
         memset(line, 0, 128);

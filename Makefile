@@ -4,21 +4,27 @@ BPFTOOL = bpftool
 
 
 SRC_DIR = src
+SRC_STORAGE = storage
 SRC_SLAVE = slave
 SRC_NtyCo = NtyCo/core
 OBJ_DIR = build
 BIN = kvstore 
 OUTPUT_DIR = ./build
 
-SOURCES = $(wildcard $(SRC_DIR)/*.c)
-SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
 
-SOURCES_T := $(filter-out $ $(SRC_DIR)/rbtree.c $(SRC_DIR)/proactor.c, $(SOURCES))
+
+
+SOURCES = $(wildcard $(SRC_DIR)/*.c)
+SOURCES_STORAGE = $(wildcard $(SRC_STORAGE)/*.c)
+SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
+SOURCES_Ntyco = $(wildcard $(SRC_NtyCo)/*.c)
+
+SOURCES_T := $(filter-out $(SRC_DIR)/proactor.c, $(SOURCES))
 SOURCES_T_SLAVE := $(filter-out $ $(SRC_SLAVE)/rbtree.c $(SRC_SLAVE)/kvs_push.c $(SRC_SLAVE)/reactor_b.c $(SRC_SLAVE)/proactor.c, $(SOURCES_SLAVE))
 SOURCES_TEST := $(filter-out $ $(SRC_DIR)/ntyco.c $(SRC_DIR)/proactor.c $(SRC_DIR)/reactor.c,  $(SOURCES))
 
-SOURCES_SLAVE = $(wildcard $(SRC_SLAVE)/*.c)
-SOURCES_Ntyco = $(wildcard $(SRC_NtyCo)/*.c)
+
+
 OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 TARGET = kvstore
 
@@ -37,12 +43,13 @@ JEM = ./testcase/testcase_stdin.c src/mem_pool.c
 
 # SRC_SERVER_SLAVE = slave/
 
-
+CFLAGS = -g -g -I$(SRC_DIR) -I$(SRC_STORAGE)
+LIB = -luring -ldl -lelf -lz -lpthread -libverbs -lsodium -ljemalloc
 
 # -ljemalloc
+#libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a
 all:
-	$(CC) -g -I$(SRC_DIR) -o $(TARGET) $(SOURCES_T) $(SOURCES_Ntyco) -luring -ldl libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a -lelf -lz -lpthread -libverbs -lsodium
-
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES_T) $(SOURCES_STORAGE) $(SOURCES_Ntyco) $(LIB)
 testcase_add:
 	$(CC) -o $(TARGET_ADD) $(SRC_ADD)
 
@@ -57,7 +64,7 @@ testcase_characters:
 
 
 server_slave:
-	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_T_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl -lsodium -lz
+	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_STORAGE) $(SOURCES_T_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl -lsodium -lz
 
 # $(SOURCES_TEST)
 test:

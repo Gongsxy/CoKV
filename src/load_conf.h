@@ -12,9 +12,8 @@ typedef struct {
     int add_save;
     char storage_structure[64];
     // sync
-    char sync_ip[10];
+    char sync_ip[16];
     int is_slave;
-    int method;
 } Config;
 
 int load_config(const char *filename, Config *cfg);

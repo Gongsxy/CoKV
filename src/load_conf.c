@@ -104,16 +104,15 @@ int load_config(const char *filename, Config *cfg){
                 while (*val == ' ') val++;
 
                 if(strcmp(mes, "sync_ip") == 0){
-                    strncpy(cfg->sync_ip, val, strlen(val));
-                    cfg->sync_ip[strlen(val)] = '\0';
-                    i++;
+                    size_t n = strlen(val);
+                    while (n > 0 && (val[n-1] == ' ' || val[n-1] == '\t' || val[n-1] == '\r' || val[n-1] == '\n'))
+                        n--;
+                    snprintf(cfg->sync_ip, sizeof(cfg->sync_ip), "%.*s", (int)n, val);
                 }
-                if(strcmp(mes, "is_salve") == 0){
+                if(strcmp(mes, "is_slave") == 0){
                     cfg->is_slave = atoi(val);
                 }
-                if(strcmp(mes, "method") == 0){
-                    cfg->method = atoi(val);
-                }
+                
             }
         }
         memset(line, 0, 128);

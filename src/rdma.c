@@ -152,7 +152,7 @@ static int modify_qp_to_rts(struct ibv_qp *qp, uint32_t local_psn) {
 }
 
 int rdma_modify(struct ibv_qp *qp, uint32_t local_psn, uint32_t remote_qpn, union ibv_gid *remote_gid, uint32_t remote_psn, int gid_index){
-    int ret;
+
     modify_qp_to_init(qp);
     modify_qp_to_rtr(qp, remote_qpn, remote_gid, remote_psn, gid_index);
     modify_qp_to_rts(qp, local_psn);
@@ -160,8 +160,6 @@ int rdma_modify(struct ibv_qp *qp, uint32_t local_psn, uint32_t remote_qpn, unio
     return 0;
 }
 
-
-static Config cfg = {0};
 
 
 int rdma_notify_slave(__g_slave *g_slave, uint32_t length){

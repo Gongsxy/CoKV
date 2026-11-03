@@ -2,13 +2,12 @@
 
 #include "hash.h"
 
-
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 
 
-
+#include "node_alloc.h"
 
 
 #define PACK_LEN_OFF				4
@@ -22,6 +21,9 @@
 #define HASH_LOAD_FACTOR 0.75
 
 #define MAX_TABLE_SIZE	1024
+#define HASH_INIT_SLOTS  1024
+
+
 
 static int _hash(char *key, int key_len, int size) {
     if (!key || size <= 0) return -1;
@@ -41,22 +43,11 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
     size_t need = sizeof(hashnode_t) + (size_t)key_len + 1 + (size_t)value_len + 1;
 
 
-#if 0
-    hashnode_t *node = NULL;
-    uint8_t cls = 0xFF;
-    
-    for (int i = 0; i < 4; i++) {
-        if (need <= g_cls_size[i]) { node = slab_alloc(&g_cls_pool[i]); cls = (uint8_t)i; break; }
-    }
-
-    if (!node) { node = malloc(need); cls = 0xFF; }
+    uint8_t cls;
+    hashnode_t *node = kvs_node_alloc(need, &cls);
     if (!node) return NULL;
     node->cls = cls;
-#else 
-    hashnode_t *node = malloc(need);
-    if (!node) return NULL;
-    node->cls = 0xFF;
-#endif
+
     char *p = (char *)(node + 1);
 
     node->key = p;
@@ -78,7 +69,7 @@ static hashnode_t *_create_node(char *key, char *value, int key_len, int value_l
 
 static int kvs_hash_rehash(kvs_hash_t *hash, size_t new_slots)
 {
-    if (!hash || new_slots <= hash->max_slots) return -1;
+    if (!hash || new_slots == 0 || new_slots == (size_t)hash->max_slots) return -1;
 
     hashnode_t **new_nodes = (hashnode_t **)calloc(new_slots, sizeof(hashnode_t *));
     if (!new_nodes) return -1;
@@ -101,18 +92,27 @@ static int kvs_hash_rehash(kvs_hash_t *hash, size_t new_slots)
     return 0;
 }
 
+static void kvs_hash_maybe_shrink(kvs_hash_t *hash)
+{
+    if ((size_t)hash->max_slots > HASH_INIT_SLOTS &&
+        (size_t)hash->count < (size_t)hash->max_slots / 8) {
+        kvs_hash_rehash(hash, (size_t)hash->max_slots / 2);
+
+        if ((size_t)hash->max_slots == HASH_INIT_SLOTS) {   /* 縮回初始大小時 */
+            extern void kvs_heap_compact(void);
+            kvs_heap_compact();                              /* 把 malloc 的空閒空間還給系統 */
+        }
+
+    }
+}
 
 static void _free_node(hashnode_t *node) {
     if (!node) return;
-#if 0
-    if (node->cls != 0xFF) { slab_free(&g_cls_pool[node->cls], node); return; }
-#endif
-
-	free(node);
+    kvs_node_free(node, node ? node->cls : KVS_CLS_MALLOC);
 }
 
 
-//
+
 int kvs_hash_create(kvs_hash_t *hash) {
 
     if (!hash) return -1;
@@ -149,10 +149,9 @@ void kvs_hash_destory(kvs_hash_t *hash) {
 		}
 	}
 
-#if 0
-    for (int i = 0; i < 4; i++) slab_pool_destroy(&g_cls_pool[i]);
-    g_pools_ready = 0;
-#endif
+
+    kvs_node_pools_destroy();
+
 
 	free(hash->nodes);
 
@@ -246,6 +245,7 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len) {
         hash->nodes[idx] = head->next;
         _free_node(head);
         hash->count--;
+        kvs_hash_maybe_shrink(hash);          /* 刪除鏈表頭的節點時也要檢查 */
         return 0;
     }
 
@@ -267,6 +267,8 @@ int kvs_hash_del(kvs_hash_t *hash, char *key, size_t key_len) {
 	_free_node(tmp);
 	hash->count --;
 	
+    kvs_hash_maybe_shrink(hash);
+
 	return 0;
 }
 
@@ -346,7 +348,7 @@ size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t coun
 			memcpy(p, &vlen, KEY_VALUE_OFF); p += KEY_VALUE_OFF;
 			memcpy(p, node->value, node->value_len); p += node->value_len;
 
-			uint32_t c_r = (uint32_t)crc32(0L, crc_p + CRC_LEN, p - crc_p - CRC_LEN);
+			uint32_t c_r = (uint32_t)crc32(0L, (const Bytef *)(crc_p + CRC_LEN), p - crc_p - CRC_LEN);
 			memcpy(crc_p, &c_r, CRC_LEN);
 
             node = node->next;
@@ -360,7 +362,7 @@ size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t coun
 	memcpy(*msg + CRC_LEN + PACK_LEN_OFF, "V1.0", VERSION_OFF);
 	memcpy(*msg + CRC_LEN + PACK_LEN_OFF + VERSION_OFF, &count, COUNT_OFF);
 
-	uint32_t crc_total = (uint32_t)crc32(0L, *msg + CRC_LEN, (uInt)(p - *msg - CRC_LEN));
+	uint32_t crc_total = (uint32_t)crc32(0L, (const Bytef *)(*msg + CRC_LEN), (uInt)(p - *msg - CRC_LEN));
 	memcpy(*msg, &crc_total, CRC_LEN);
 
 
@@ -429,3 +431,5 @@ int kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length){
     return (int)(snap_len);
 
 }
+
+

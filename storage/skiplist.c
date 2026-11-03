@@ -1,7 +1,7 @@
 
 
 #include "skiplist.h"
-
+#include "node_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -51,10 +51,12 @@ static kvs_sknode_t *_sk_create_node(int level, char *key, char *value,
     size_t fwd  = sizeof(kvs_sknode_t *) * (size_t)level;
     size_t need = sizeof(kvs_sknode_t) + fwd + (size_t)key_len + 1 + (size_t)value_len + 1;
 
-    kvs_sknode_t *node = malloc(need);
+    uint8_t cls;
+    kvs_sknode_t *node = kvs_node_alloc(need, &cls);
     if (!node) return NULL;
-    node->cls   = 0xFF;
+    node->cls   = cls;
     node->level = (uint8_t)level;
+
     memset(node->forward, 0, fwd);
 
     char *p = (char *)node->forward + fwd;
@@ -77,7 +79,7 @@ static kvs_sknode_t *_sk_create_node(int level, char *key, char *value,
 
 static void _sk_free_node(kvs_sknode_t *node) {
     if (!node) return;
-    free(node);
+    kvs_node_free(node, node->cls);
 }
 
 
@@ -165,6 +167,8 @@ void kvs_skiplist_destory(kvs_skiplist_t *inst) {
     }
 
     _sk_free_node(inst->header);
+    kvs_node_pools_destroy();
+    
     inst->header = NULL;
     inst->level  = 1;
     inst->count  = 0;

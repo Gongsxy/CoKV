@@ -1,4 +1,5 @@
 #include "array.h"
+#include "node_alloc.h"
 
 
 #include <string.h>
@@ -22,9 +23,10 @@ static kvs_arrnode_t *_arr_create_node(char *key, char *value, int key_len, int 
 {
     size_t need = sizeof(kvs_arrnode_t) + (size_t)key_len + 1 + (size_t)value_len + 1;
 
-    kvs_arrnode_t *node = malloc(need);
+    uint8_t cls;
+    kvs_arrnode_t *node = kvs_node_alloc(need, &cls);
     if (!node) return NULL;
-    node->cls = 0xFF;
+    node->cls = cls;
 
     char *p = (char *)(node + 1);
 
@@ -46,7 +48,7 @@ static kvs_arrnode_t *_arr_create_node(char *key, char *value, int key_len, int 
 
 static void _arr_free_node(kvs_arrnode_t *node) {
     if (!node) return;
-    free(node);
+    kvs_node_free(node, node->cls);  
 }
 
 
@@ -113,7 +115,8 @@ void kvs_array_destory(kvs_array_t *inst) {
     if (!inst) return;
 
     for (size_t i = 0; i < inst->total; i++) _arr_free_node(inst->table[i]);
-
+    kvs_node_pools_destroy();
+    
     free(inst->table);
     inst->table = NULL;
     inst->total = 0;

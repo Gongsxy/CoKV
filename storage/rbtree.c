@@ -1,6 +1,6 @@
 
 #include "rbtree.h"
-
+#include "node_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -35,9 +35,10 @@ static kvs_rbnode_t *_rb_create_node(kvs_rbtree_t *tree, char *key, char *value,
 {
     size_t need = sizeof(kvs_rbnode_t) + (size_t)key_len + 1 + (size_t)value_len + 1;
 
-    kvs_rbnode_t *node = malloc(need);
+    uint8_t cls;
+    kvs_rbnode_t *node = kvs_node_alloc(need, &cls);
     if (!node) return NULL;
-    node->cls = 0xFF;
+    node->cls = cls;
 
     char *p = (char *)(node + 1);
 
@@ -64,7 +65,7 @@ static kvs_rbnode_t *_rb_create_node(kvs_rbtree_t *tree, char *key, char *value,
 
 static void _rb_free_node(kvs_rbnode_t *node) {
     if (!node) return;
-    free(node);
+    kvs_node_free(node, node->cls);
 }
 
 
@@ -348,6 +349,8 @@ void kvs_rbtree_destory(kvs_rbtree_t *tree) {
     if (!tree) return;
 
     _rb_free_tree(tree, tree->root);
+
+    kvs_node_pools_destroy();
 
     tree->root  = RB_NIL(tree);
     tree->count = 0;

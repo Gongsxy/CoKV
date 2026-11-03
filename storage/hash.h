@@ -31,6 +31,7 @@ int    kvs_hash_exist(kvs_hash_t *hash, char *key, size_t key_len);
 int    kvs_hash_mod(kvs_hash_t *hash, char *key, char *value, size_t key_len, size_t value_len);
 
 size_t kvs_hash_save(kvs_hash_t *hash, char **msg, size_t *length, uint32_t count);
-int    kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
+int  kvs_hash_save_slave(kvs_hash_t *hash, char **msg, size_t *length);
+
 
 #endif

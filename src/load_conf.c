@@ -22,7 +22,7 @@ int load_config(const char *filename, Config *cfg){
 
     int status = -1;
     char line[128] = {0};
-    int i = 0;
+
     while(fgets(line, 127, fp)){
         
         line[strcspn(line, "\r\n")] = '\0';

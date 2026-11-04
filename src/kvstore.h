@@ -11,17 +11,19 @@
 
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <sys/time.h>
-#include <ctype.h>
-#include <sys/mman.h>			
-#include <sys/stat.h>
-
+#include <sys/mman.h>		
 
 #include <pthread.h>
 
 #include "load_conf.h"
 #include "rdma.h"
 #include "../NtyCo/core/nty_coroutine.h"
+#include "alloc_conf.h"
+#include "build_conf.h"
+
+#if USE_JEMALLOC
+#include <jemalloc/jemalloc.h>
+#endif
 
 
 #define KVS_MAX_VALUE   (512u * 1024u * 1024u) 
@@ -38,6 +40,12 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
 
 
 int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma);
+
+void check_bgsave_done(void);
+int bgsave_start(int for_repl);
+int bgsave_running(void);
+unsigned bgsave_gen(void);
+int bgsave_last_ok(void);
 
 
 #endif

@@ -43,13 +43,22 @@ JEM = ./testcase/testcase_stdin.c src/mem_pool.c
 
 # SRC_SERVER_SLAVE = slave/
 
-CFLAGS = -g -g -I$(SRC_DIR) -I$(SRC_STORAGE)
-LIB = -luring -ldl -lelf -lz -lpthread -libverbs -lsodium -ljemalloc
+CFLAGS = -g -O2 -Wall -I$(SRC_DIR) -I$(SRC_STORAGE) $(EXTRA)
 
 # -ljemalloc
 #libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a
+
+USE_JEMALLOC := $(shell grep -qE '^\#define[[:space:]]+USE_JEMALLOC[[:space:]]+1' $(SRC_STORAGE)/alloc_conf.h && echo 1)
+
+LIB = -luring -ldl -lelf -lz -lpthread -libverbs -lsodium
+ifeq ($(USE_JEMALLOC),1)
+LIB += -ljemalloc
+endif
+
 all:
-	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES_T) $(SOURCES_STORAGE) $(SOURCES_Ntyco) $(LIB)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES_T) $(SOURCES_STORAGE) libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a $(SOURCES_Ntyco) $(LIB)
+
+
 testcase_add:
 	$(CC) -o $(TARGET_ADD) $(SRC_ADD)
 
@@ -64,19 +73,12 @@ testcase_characters:
 
 
 server_slave:
-	$(CC) -I$(SRC_SLAVE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_STORAGE) $(SOURCES_T_SLAVE) $(SOURCES_Ntyco) src/rdma.c src/rdma.h -luring -libverbs -pthread -ldl -lsodium -lz
+	$(CC) -I$(SRC_SLAVE) -I$(SRC_STORAGE) -o $(TARGET_SERVER_SLAVE) $(SOURCES_STORAGE) $(SOURCES_T_SLAVE) $(SOURCES_Ntyco) src/rdma.c -luring -libverbs -pthread -ldl -lsodium -lz $(if $(filter 1,$(USE_JEMALLOC)),-ljemalloc)
 
 # $(SOURCES_TEST)
 test:
 	$(CC) -g -o test src/test.c src/sync_slave.c $(SOURCES_Ntyco) -libverbs -luring -pthread -ldl
-# TARGET = kvstore
-# -mcmodel=medium
-# $(JEM)
-# SRC = kvstore.c kvs_array.c hash.c rbtree.c skiptable.c reactor.c kvs_txt.c proactor.c kvs_push.c mempool.c testcase/get_mes.c -luring 
-# JEM = -L/usr/local/lib -ljemalloc 
-# all:
-# 	$(CC) -g -o build/$(TARGET) $(SRC)  
-# # b:
-# # 	$(CC) -o $(TARGET_B) $(SRC_B) 
+
+
 clean:
-	rm -rf $(TARGET) $(TARGET_ADD) $(TARGET_FULL) $(TARGET_SLAVE) $(TARGET_S) $(TARGET_SAVE) test
+	rm -rf $(TARGET) $(TARGET_ADD) $(TARGET_FULL) $(TARGET_SLAVE) $(TARGET_SERVER_SLAVE) $(TARGET_SAVE) test

@@ -30,8 +30,7 @@ typedef struct kvs_skiplist_s {
 } kvs_skiplist_t;
 
 int    kvs_skiplist_create(kvs_skiplist_t *inst);
-void   kvs_skiplist_destory(kvs_skiplist_t *inst);
-#define kvs_skiplist_destroy kvs_skiplist_destory   /* ÏàÈİÅfÃû×Ö */
+void   kvs_skiplist_destroy(kvs_skiplist_t *inst);
 
 int    kvs_skiplist_set(kvs_skiplist_t *inst, char *key, char *value, size_t key_len, size_t value_len);
 char  *kvs_skiplist_get(kvs_skiplist_t *inst, char *key, size_t key_len, size_t *value_len);

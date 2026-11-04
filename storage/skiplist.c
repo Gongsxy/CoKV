@@ -155,7 +155,7 @@ int kvs_skiplist_create(kvs_skiplist_t *inst) {
 }
 
 //
-void kvs_skiplist_destory(kvs_skiplist_t *inst) {
+void kvs_skiplist_destroy(kvs_skiplist_t *inst) {
 
     if (!inst || !inst->header) return;
 

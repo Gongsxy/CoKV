@@ -1,6 +1,8 @@
 #ifndef BUILD_CONFIG_H
 #define BUILD_CONFIG_H
 
-#define USE_JEMALLOC 1    /* 0 = glibc + Ó›‘›ów³Ø£»1 = jemalloc£¨Makefile Ò²Òª¼Ó -ljemalloc£© */
+#ifndef REPL_MODE
+#define REPL_MODE 0
+#endif
 
 #endif

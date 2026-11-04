@@ -4,7 +4,7 @@
 #include "rdma.h"
 #include "load_conf.h"
 
-//  #include "../libbpf-bootstrap/examples/c/resp_capture.h"
+ #include "../libbpf-bootstrap/examples/c/resp_capture.h"
 
 #include "../storage/storage.h"
 #include "ringbuf.h"
@@ -18,29 +18,52 @@
 
 #include <errno.h> 
 
-
-
+#include <sys/timerfd.h>
 #include <sys/sendfile.h>
 
 
 #define FULL_FILE_TMP   "config/full.tmp"
 
 
-#define EBPF        0
-
+#define EBPF        (REPL_MODE != 0)
+// #define REPL_FAKE_SEND  1
 
 static Config cfg = {0};
 
-
+#if EBPF
 static volatile int rdma_syncing = 0;
 static volatile int fwd_collecting = 0;
 static volatile int fwd_queueing = 0;
-
+#endif
 
 static volatile int handshaking = 0;
 
 __g_rdma g_rdma = {0};
 __g_slave g_slave = {.fd = -1};
+
+
+
+static int co_sleep_ms(int ms)
+{
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (tfd < 0) return -1;
+
+    struct itimerspec its = {0};
+    its.it_value.tv_sec  = ms / 1000;
+    its.it_value.tv_nsec = (long)(ms % 1000) * 1000000L;
+    if (its.it_value.tv_sec == 0 && its.it_value.tv_nsec == 0)
+        its.it_value.tv_nsec = 1;              /* 全 0 代表停用計時器，至少給 1 奈秒 */
+
+    if (timerfd_settime(tfd, 0, &its, NULL) < 0) {
+        close(tfd);
+        return -1;
+    }
+
+    uint64_t expirations;
+    ssize_t n = read(tfd, &expirations, sizeof expirations);   /* 被 hook：讓出 CPU，到期才回來 */
+    close(tfd);
+    return (n == (ssize_t)sizeof expirations) ? 0 : -1;
+}
 
 
 
@@ -65,21 +88,12 @@ void master_forward_to_slave(const char *data, unsigned len);
 
 #endif
 
-static int sendfile_push_stream(uint32_t total)
+static int sendfile_push_stream(int tmp_fd, uint32_t total)
 {
     if (g_slave.fd < 0) { fprintf(stderr, "[sf] no slave conn\n"); return -1; }
 
-    int tmp_fd = open(FULL_FILE_TMP, O_RDONLY);
     if (tmp_fd < 0) {
         fprintf(stderr, "[sf] open full.txt fail: %s\n", strerror(errno));
-        return -1;
-    }
-
-    struct stat st;
-    if (fstat(tmp_fd, &st) != 0) { perror("fstat"); close(tmp_fd); return -1; }
-    if ((uint32_t)st.st_size != total) {
-        fprintf(stderr, "[sf] size mismatch: file=%ld total=%u\n", (long)st.st_size, total);
-        close(tmp_fd);
         return -1;
     }
 
@@ -97,7 +111,7 @@ static int sendfile_push_stream(uint32_t total)
             continue;
         }
         if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
-            nty_coroutine_sleep(0);          
+            co_sleep_ms(1);          
             continue;
         }
         if (n == 0) break;                     
@@ -116,31 +130,30 @@ static int sendfile_push_stream(uint32_t total)
     }
 
 out:
-    close(tmp_fd);
     return rc;
 }
 
 
 
-static int repl_make_snapshot(char **msg, size_t *size){//save .tmp
-    extern kvs_rbtree_t *globle_rbtree;
-    extern kvs_skiplist_t *globle_skiplist;
-    extern kvs_array_t *globle_array;
-    int ret = 0;
-    if (strncmp(cfg.storage_structure, "array", 5) == 0){
-        ret = kvs_array_save_slave(globle_array, msg, size);
-    }else if (strncmp(cfg.storage_structure, "rbtree", 6) == 0){
-        ret = kvs_rbtree_save_slave(globle_rbtree, msg, size);
-    }else if (strncmp(cfg.storage_structure, "hash", 4) == 0){
-        ret = kvs_hash_save_slave(globle_hash, msg, size);
-    }else if (strncmp(cfg.storage_structure, "skiplist", 8) == 0){
-        ret = kvs_skiplist_save_slave(globle_skiplist, msg, size);
-    }
+// static int repl_make_snapshot(char **msg, size_t *size){//save .tmp
+//     extern kvs_rbtree_t *globle_rbtree;
+//     extern kvs_skiplist_t *globle_skiplist;
+//     extern kvs_array_t *globle_array;
+//     int ret = 0;
+//     if (strncmp(cfg.storage_structure, "array", 5) == 0){
+//         ret = kvs_array_save_slave(globle_array, msg, size);
+//     }else if (strncmp(cfg.storage_structure, "rbtree", 6) == 0){
+//         ret = kvs_rbtree_save_slave(globle_rbtree, msg, size);
+//     }else if (strncmp(cfg.storage_structure, "hash", 4) == 0){
+//         ret = kvs_hash_save_slave(globle_hash, msg, size);
+//     }else if (strncmp(cfg.storage_structure, "skiplist", 8) == 0){
+//         ret = kvs_skiplist_save_slave(globle_skiplist, msg, size);
+//     }
 
-    if(ret < 0) return -1;
+//     if(ret < 0) return -1;
 
-    return ret;
-}
+//     return ret;
+// }
 
 
 
@@ -162,14 +175,18 @@ static void repl_sender_func(void *arg)
             g_sender_waiting = 1;
 
             uint64_t v;
-            read(g_repl_efd, &v, sizeof(v));
+            if (read(g_repl_efd, &v, sizeof(v)) < 0) {}
             g_sender_waiting = 0;
             continue;
 
         }
 
         if(n > 64 * 1024) n = 64 * 1024;
+#ifdef REPL_FAKE_SEND
+        ssize_t s = (ssize_t)n;          /* 假裝已經送出，只量送出之前的成本 */
+#else
         ssize_t s = nty_send(fd, p, n, 0);
+#endif
 
         if(s > 0){
             ringbuf_consume(&g_ring, s);
@@ -384,17 +401,19 @@ void sendfile_full_sync(void *arg){
 
     int rc = -1;
     int fd = -1;
-    char *mes = NULL;
-    size_t mes_size = 0;
-    int sync_ret = 0;
+    int file_fd = -1;
+
+    // char *mes = NULL;
+    // size_t mes_size = 0;
+    // int sync_ret = 0;
 
 
     if (g_slave.fd >= 0) nty_close(g_slave.fd);
     g_slave.fd = -1;
 
-    mes_size = 1024 * 1024;
-    mes = malloc(mes_size);
-    if(!mes){ perror("mes malloc"); goto out; }
+    // mes_size = 1024 * 1024;
+    // mes = malloc(mes_size);
+    // if(!mes){ perror("mes malloc"); goto out; }
 
 
 #if EBPF
@@ -402,17 +421,50 @@ void sendfile_full_sync(void *arg){
     g_slave_sr.len = g_slave_sr.off = 0;
     fwd_collecting = 0;
     fwd_queueing   = 1;          // 沒有這行，master_forward_to_slave 會直接 return
-    #else
-    g_ring.send_off = g_ring.write_off;
-    g_repl_collect  = 1;         // eBPF 模式下設成 1，ringbuf 沒人消費，塞滿後用戶端會被斷線
+     
+#endif
+    
+
+    while (bgsave_running()) {
+        check_bgsave_done();
+        if (bgsave_running()) {
+            co_sleep_ms(1);
+        }
+    }
+
+    unsigned gen = bgsave_gen();
+
+#if EBPF
+    int for_repl = 0;      /* eBPF 自己有轉發佇列（g_slave_sr），不需要 g_ring */
+#else
+    int for_repl = 1;
 #endif
 
+    if (bgsave_start(for_repl) != 0) {
+        fprintf(stderr, "[sync] bgsave_start failed\n");
+        goto out;
+    }
 
-    sync_ret = repl_make_snapshot(&mes, &mes_size);
-    if(sync_ret < 0){ fprintf(stderr, "sync message error\n"); goto out; }
-    
-    free(mes);
-    mes = NULL;
+
+    while (bgsave_gen() == gen) {
+        check_bgsave_done();
+        if (bgsave_gen() == gen) co_sleep_ms(10);
+    }
+
+    if (!bgsave_last_ok()) {
+        fprintf(stderr, "[sync] snapshot failed\n");
+        goto out;
+    }
+
+
+    file_fd = open("config/full.txt", O_RDONLY);
+    if (file_fd < 0) { perror("[sync] open full.txt"); goto out; }
+
+
+    struct stat st;
+    if (fstat(file_fd, &st) != 0) { perror("[sync] fstat"); goto out; }
+    uint32_t total = (uint32_t)st.st_size;
+
 
 
     fd = nty_socket(AF_INET, SOCK_STREAM, 0);
@@ -440,7 +492,7 @@ void sendfile_full_sync(void *arg){
 
 
     {
-        uint32_t total_net = htonl((uint32_t)sync_ret);
+        uint32_t total_net = htonl((uint32_t)total);
         if (nty_send(fd, &total_net, sizeof(total_net), 0) != (ssize_t)sizeof(total_net)) {
             fprintf(stderr, "[sync] send total fail\n");
             goto out;
@@ -448,7 +500,7 @@ void sendfile_full_sync(void *arg){
     }
 
 
-    int pr = sendfile_push_stream((uint32_t)sync_ret);
+    int pr = sendfile_push_stream(file_fd, total);
     if(pr < 0){
         fprintf(stderr, "[master] push snapshot FAILED\n"); goto out;
     }
@@ -474,13 +526,16 @@ if (g_slave_sr.len > g_slave_sr.off && !g_slave_sr.sending) {
 #endif
 
 
-    fprintf(stderr, "master snapshot pushed size=%d B ok\n", sync_ret);
+    fprintf(stderr, "master snapshot pushed size=%d B ok\n", total);
 
 
     rc = 0;
     
 out:
-    free(mes);
+    // free(mes);
+
+    if (file_fd >= 0) close(file_fd);
+
     if(rc < 0){
 #if EBPF
     rdma_syncing = fwd_collecting = fwd_queueing = 0;
@@ -636,6 +691,8 @@ void master_forward_to_slave(const char *data, unsigned len) {//ebpf send
     }
 
 }
+#else
+void master_forward_to_slave(const char *data, unsigned len) { (void)data; (void)len; }
 #endif
 
 int kvs_sync(void){//recv SYNC 
@@ -644,9 +701,11 @@ int kvs_sync(void){//recv SYNC
     handshaking = 1;
 
     nty_coroutine *co = NULL;
+#if EBPF
     fwd_collecting = 0;
     rdma_syncing = 0;
     fwd_queueing   = 0;
+#endif
     if(nty_coroutine_create(&co, sendfile_full_sync, NULL) != 0){
         handshaking = 0;
         return -1;
@@ -660,9 +719,7 @@ int kvs_sync(void){//recv SYNC
 void read_func(void *arg){
     int cli_fd = *(int *)arg;
 
-    if(cfg.use_mempool == 0){
-        free(arg);
-    }
+    free(arg);
 
     if(cli_fd < 0){
         perror("read arg error");
@@ -693,7 +750,7 @@ void read_func(void *arg){
 #endif
     while(1){
 
-        int recv_len = nty_recv(cli_fd, buf, 64 * 1024 - 1, 0);
+        int recv_len = recv(cli_fd, buf, 64 * 1024 - 1, 0);
 
         if (recv_len == 0) { 
 #if EBPF
@@ -739,15 +796,7 @@ void read_func(void *arg){
         }
 
         
-        // static uint64_t last_trim_ms = 0;
-        // struct timespec ts;
-        // clock_gettime(CLOCK_MONOTONIC, &ts);
-        // uint64_t cur_ms = (uint64_t)ts.tv_sec * 1000ull + ts.tv_nsec / 1000000ull;
-        // if (cur_ms - last_trim_ms >= 1000) {        
-        //     last_trim_ms = cur_ms;
-        //     malloc_trim(0);
-        // }
-        
+
     }
 
 out:
@@ -773,9 +822,8 @@ out:
 void accept_func(void *arg){
 
     int port = *(int *)arg;
-    if(cfg.use_mempool == 0){
-        free(arg);
-    }
+    free(arg);
+    
     if(!port) return ;
     int fd = nty_socket(AF_INET, SOCK_STREAM, 0);
     if(fd < 0){
@@ -837,7 +885,11 @@ int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma){
     int *p = calloc(1, sizeof(int));  if(!p){ return -1; } *p = cfg.port;
     g_rdma = *g_m_rdma;
 
-#if EBPF
+#ifdef REPL_FAKE_SEND
+    fprintf(stderr, "[repl] FAKE SEND mode\n");
+#endif
+
+#if REPL_MODE == 1
     if (ringbuf_init() < 0) {
         fprintf(stderr, "ringbuf_init failed\n");
         return -1;

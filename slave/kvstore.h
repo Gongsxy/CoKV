@@ -21,11 +21,13 @@
 #include "../src/rdma.h"
 #include "../storage/storage.h"
 
-// #include "server.h"
 
 #define KVS_MAX_VALUE   (512u * 1024u * 1024u)
 #define KVS_MAX_FRAME   (KVS_MAX_VALUE + 64u * 1024u)
 #define KVS_RET_DROP    -3
+
+
+extern int g_from_master;
 
 
 void kvs_conn_ctx_free(int fd);
@@ -34,13 +36,13 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
 int ntyco_start(Config *server_cfg, __g_rdma *g_m_rdma);
 
 void check_bgsave_done(void);
-int bgsave_running(void);
-unsigned bgsave_gen(void);
-int bgsave_last_ok(void);
 int bgsave_start(int for_repl);
 
 
 int kvs_full_load(const char *path);
 void kvs_clear_all(void);
+void kvs_aof_reset(void);
+
+void bgsave_abort(void);
 
 #endif

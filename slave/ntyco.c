@@ -16,20 +16,17 @@
 #include <sys/timerfd.h>
 
 
-#define SNAP_INIT_SIZE  (1024 * 1024) 
 
-static char   *g_snap_buf = NULL;
-static size_t  g_snap_cap = 0;
 static size_t  g_snap_len = 0;
 
 
 static int g_listen_ready;
-// static int rdma_syncing = 0;
+
 
 Config cfg;
 
 __g_rdma g_rdma_slave = {0};
-// __g_slave g_s_slave = {0};
+
 
 __g_slave g_slave = {.fd = -1};
 
@@ -69,6 +66,7 @@ static int pwrite_all(int fd, const char *buf, size_t len, size_t off) {
 
 #if 0
 #define KEY_VALUE_OFF   4
+#define SNAP_INIT_SIZE  (1024 * 1024) 
 static int kvs_apply_kv_chunk(const char *msg, uint32_t len)//解析全量日誌
 {
     if (!msg) return -1;
@@ -177,9 +175,6 @@ void rdma_handshake(void *arg)
         int total_loaded = 0;
         int snap_failed  = 0;
 
-
-        uint64_t t_load0 = 0, t_load1 = 0;     
-        uint64_t t_apply_us = 0, t_wait_us = 0; 
         int chunks = 0;                         
 
 
@@ -247,21 +242,23 @@ void rdma_handshake(void *arg)
 
 
             if (!snap_failed) {
+                bgsave_abort();
+                kvs_clear_all();                                   
+                total_loaded = kvs_full_load(recv_path);
+                if (total_loaded < 0) snap_failed = 1;
+            }
+
+
+            if (!snap_failed) {
                 if (rename(recv_path, "config/full.txt") < 0) {
                     perror("[snap] rename");
                     snap_failed = 1;
                 }
             }
 
-            if (!snap_failed) {
-                extern void kvs_clear_all(void);
-                kvs_clear_all();                                   /* 見下方問題一 */
-                total_loaded = kvs_full_load("config/full.txt");
-                if (total_loaded < 0) snap_failed = 1;
-            }
 
-
-            if (snap_failed) unlink(recv_path);
+            if (!snap_failed) kvs_aof_reset();
+            if (snap_failed)  unlink(recv_path);
 
 
             fprintf(stderr, "[slave] snapshot %s: bytes=%u records=%d\n",
@@ -388,9 +385,11 @@ fprintf(stderr, "[SNAP_DONE] records=%d\n", total_loaded);
                 perror("repl nty_recv");
                 break;
             }
-
-
+            
+            g_from_master = 1;
             int r = kvs_protocol(fd, cbuf, n, &cres, &res_size);
+            g_from_master = 0;
+            
             if (r < 0) {
                 fprintf(stderr, "[repl] apply fail(%d), drop stream\n", r);
                 break;
@@ -445,10 +444,7 @@ void normal_func(void *arg){
 }
 
 
-
-
-
-
+#if 0
 typedef struct {
     int    fd;
     char  *buf;        
@@ -501,7 +497,7 @@ void send_func(void *arg){
     }
     
 }
-
+#endif
 
 static uint64_t g_last_trim_ms = 0;
 static void trim_func(void){
@@ -540,10 +536,6 @@ void read_func(void *arg){
         buf = NULL; response = NULL;
         return ;
     }
-
-    send_resp_t *sr = calloc(1, sizeof(send_resp_t));
-    if(!sr) { free(buf); free(response); nty_close(cli_fd); return; }
-    sr->fd = cli_fd;
 
 
     while(1){
@@ -595,15 +587,6 @@ void read_func(void *arg){
     }
  
 out:
-    if (sr) {
-        sr->closed = 1;
-        if (!sr->sending) {
-            free(sr->buf); sr->buf = NULL;
-            free(sr);
-        }
-        sr = NULL;
-    }
-
     kvs_conn_ctx_free(cli_fd);
     nty_close(cli_fd);
 
@@ -662,11 +645,6 @@ void accept_func(void *arg){
         int *arg = malloc(sizeof(int));
         if (!arg) { nty_close(client_fd); continue; }
         *arg = client_fd;
-
-        int sndbuf = 8 * 1024 * 1024;
-        int rcvbuf = 8 * 1024 * 1024;
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
         nty_coroutine *read_co;
         if(nty_coroutine_create(&read_co, read_func, arg) != 0){

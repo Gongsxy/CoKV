@@ -1652,8 +1652,12 @@ int main(int argc, char const *argv[]){
     g_repl_efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (g_repl_efd < 0) { perror("eventfd"); return 1; }
 
-    if(server_cfg.add_save == 1) kvs_add_read();
-    else if(server_cfg.full_save == 1) kvs_full_read();
+    int loaded = 0;
+    if(server_cfg.add_save == 1){
+        kvs_add_read();
+        loaded = 1;
+    }
+    if (!loaded && server_cfg.full_save == 1) kvs_full_read();
     
 
     rdma_init(&gr);

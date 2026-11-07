@@ -134,38 +134,24 @@ out:
 }
 
 
-
-// static int repl_make_snapshot(char **msg, size_t *size){//save .tmp
-//     extern kvs_rbtree_t *globle_rbtree;
-//     extern kvs_skiplist_t *globle_skiplist;
-//     extern kvs_array_t *globle_array;
-//     int ret = 0;
-//     if (strncmp(cfg.storage_structure, "array", 5) == 0){
-//         ret = kvs_array_save_slave(globle_array, msg, size);
-//     }else if (strncmp(cfg.storage_structure, "rbtree", 6) == 0){
-//         ret = kvs_rbtree_save_slave(globle_rbtree, msg, size);
-//     }else if (strncmp(cfg.storage_structure, "hash", 4) == 0){
-//         ret = kvs_hash_save_slave(globle_hash, msg, size);
-//     }else if (strncmp(cfg.storage_structure, "skiplist", 8) == 0){
-//         ret = kvs_skiplist_save_slave(globle_skiplist, msg, size);
-//     }
-
-//     if(ret < 0) return -1;
-
-//     return ret;
-// }
-
-
-
+static unsigned g_repl_epoch = 0;
 static void repl_sender_func(void *arg)
-{
+{   
+    unsigned my_epoch = (unsigned)(uintptr_t)arg;
+
     int fd = g_slave.fd;
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
     for(;;){
+        
+        if (g_repl_epoch != my_epoch) break;
 
-        if(g_slave.fd != fd) break;
+
+        if (!g_repl_collect) {
+            fprintf(stderr, "[repl] ringbuf overflow, drop replica, need full resync\n");
+            break;                      // 清理交給迴圈外
+        }
 
         char *p;
         size_t n = ringbuf_peek(&g_ring, &p);
@@ -188,6 +174,7 @@ static void repl_sender_func(void *arg)
         ssize_t s = nty_send(fd, p, n, 0);
 #endif
 
+        
         if(s > 0){
             ringbuf_consume(&g_ring, s);
             continue;
@@ -199,13 +186,13 @@ static void repl_sender_func(void *arg)
         break;
     }
 
-    if(g_slave.fd == fd){
-        nty_close(fd);
-        g_slave.fd = -1;
-
+    if (g_repl_epoch == my_epoch) {              // 只有自己還是現任才清理
+        if (g_slave.fd == fd) {
+            nty_close(fd);
+            g_slave.fd = -1;
+        }
+        g_repl_collect = 0;
     }
-
-    g_repl_collect = 0;
 }
 
 
@@ -403,18 +390,17 @@ void sendfile_full_sync(void *arg){
     int fd = -1;
     int file_fd = -1;
 
-    // char *mes = NULL;
-    // size_t mes_size = 0;
-    // int sync_ret = 0;
 
 
     if (g_slave.fd >= 0) nty_close(g_slave.fd);
     g_slave.fd = -1;
 
-    // mes_size = 1024 * 1024;
-    // mes = malloc(mes_size);
-    // if(!mes){ perror("mes malloc"); goto out; }
+    unsigned my_epoch = ++g_repl_epoch; 
 
+    {
+        uint64_t one = 1;
+        if (write(g_repl_efd, &one, sizeof(one)) < 0) {}
+    }
 
 #if EBPF
     g_slave_sr.fd  = -1;
@@ -518,7 +504,7 @@ if (g_slave_sr.len > g_slave_sr.off && !g_slave_sr.sending) {
 #else
 
     nty_coroutine *sender_co;
-    if (nty_coroutine_create(&sender_co, repl_sender_func, NULL) != 0) {
+    if (nty_coroutine_create(&sender_co, repl_sender_func,(void *)(uintptr_t)my_epoch) != 0) {
         fprintf(stderr, "[repl] create sender failed\n");
         goto out;
     }

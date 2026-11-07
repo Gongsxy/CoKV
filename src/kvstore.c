@@ -1101,14 +1101,13 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
             kvs_ctx[fd].resp_cap = resp_cap;
         }
 
-        int repl_full = 0;
         if(g_repl_cmd == 1 && load_saved_msg == 1 && g_repl_collect == 1){
             int ring_ret = ringbuf_append(&g_ring, frame, packet_len);
             if(ring_ret == 0) {
                 ringbuf_repl_notify();
             }else if (ring_ret == -2) {
                 fprintf(stderr, "[repl] ringbuf full, replica needs full resync\n");
-                repl_full = 1;
+                g_repl_collect = 0;
             }
         }
 
@@ -1249,11 +1248,6 @@ int kvs_protocol(int fd, char *msg, int length, char **response, size_t *respons
                 break;
             }
         }
-    
-        if (repl_full) { 
-            ret_code = -2; 
-            break; 
-        }
 
     }
     
@@ -1352,36 +1346,36 @@ void dest_kvs(void){
 #define FULL_OFF_COUNT   12
 #define FULL_OFF_PACKLEN 4
 
-void kvs_add_read(void){
+int kvs_add_read(void){
     
     int fd = open("config/add.txt", O_RDONLY);
     if(fd == -1){
-        perror("open config/add.txt");
-        return;
+        if (errno != ENOENT) perror("open config/add.txt");
+        return 0;
     }
 
     struct stat st;
     if(fstat(fd, &st) < 0){
         perror("fstat error");
         close(fd);
-        return ;
+        return 0;
     }
     off_t size = st.st_size;
     if(size < 0){
         perror("fstat size error");
         close(fd);
-        return ;
+        return 0;
     }
     size_t len = st.st_size;
     if(len == 0){
         close(fd);
-        return;   
+        return 0;   
     }
     char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
     if(addr == MAP_FAILED){
         close(fd);
         perror("mmap error");
-        return ;
+        return 0;
     }
 
     load_saved_msg = 0;
@@ -1391,7 +1385,8 @@ void kvs_add_read(void){
 
     char *replay_response = NULL;
     size_t replay_response_size = 0;
-
+    
+    int replayed = 0;
     while (p + 4 <= end) {
         uint32_t crc_exp;
         memcpy(&crc_exp, p, 4);
@@ -1413,6 +1408,7 @@ void kvs_add_read(void){
 
         kvs_protocol(fd, p + 4, (int)plen, &replay_response, &replay_response_size);
         p += 4 + plen;
+        replayed++;
     }
 
     kvs_conn_ctx_free(fd);
@@ -1420,8 +1416,8 @@ void kvs_add_read(void){
     load_saved_msg = 1;
     munmap(addr, len);
     close(fd);
-    // if(server_cfg.use_mempool == 1) mp_large_free(pool, tmp);
-    // else free(tmp);
+
+    return replayed;
 }
 
 
@@ -1518,7 +1514,7 @@ void kvs_full_read(void) {
 
         uint32_t klen; uint32_t vlen;
         memcpy(&klen, p, 4);
-        if (klen == 0 || (size_t)(end - p) < (size_t)4 + klen + 4 + 4) {
+        if (klen == 0 || (size_t)(end - p) < (size_t)4 + klen + 4) {
             fprintf(stderr, "[load] bad klen=%u at %zu, stop\n", klen, (size_t)(p - addr));
             goto out;
         }
@@ -1654,8 +1650,7 @@ int main(int argc, char const *argv[]){
 
     int loaded = 0;
     if(server_cfg.add_save == 1){
-        kvs_add_read();
-        loaded = 1;
+        loaded = kvs_add_read();
     }
     if (!loaded && server_cfg.full_save == 1) kvs_full_read();
     

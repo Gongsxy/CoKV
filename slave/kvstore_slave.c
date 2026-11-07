@@ -7,7 +7,7 @@
 #include "mempool.h"
 
 #include "kvs_parse.h"
-#include "node_alloc.h"
+#include "../storage/node_alloc.h"
 
 
 #include <signal.h>
@@ -1383,7 +1383,7 @@ int kvs_full_load(const char *path) {
 
         uint32_t klen; uint32_t vlen;
         memcpy(&klen, p, 4);
-        if (klen == 0 || (size_t)(end - p) < (size_t)4 + klen + 4 + 4) {
+        if (klen == 0 || (size_t)(end - p) < (size_t)4 + klen + 4) {
             fprintf(stderr, "[load] bad klen=%u at %zu, stop\n", klen, (size_t)(p - addr));
             goto out;
         }

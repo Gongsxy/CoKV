@@ -18,7 +18,7 @@ struct {
 } resp_ringbuf  SEC(".maps");
 
 
-SEC("uprobe//home/topeet/Desktop/test/kvstore/kvstore:kvs_protocol")
+SEC("uprobe//home/samba/9.1kvstore/kvstore/kvstore:kvs_protocol")
 
 // int kvs_protocol(int fd, char *msg, int length, char **response, size_t *response_size)
 // int kvs_split_token(char *msg, char *tokens[], int length, size_t *key_len, size_t *value_len, int *resp_total)

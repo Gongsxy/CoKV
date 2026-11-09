@@ -98,6 +98,7 @@ fail:
 }
 
 int resp_capture_poll(int max_records){
+#if 0
 	if (!g_rb) return 0;
 
 	int total = 0;
@@ -113,4 +114,10 @@ int resp_capture_poll(int max_records){
 	}
 
 	return total;
+#else
+
+    if (!g_rb) return 0;
+    return ring_buffer__consume(g_rb);
+
+#endif
 }

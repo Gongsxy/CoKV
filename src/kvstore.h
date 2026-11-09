@@ -18,7 +18,7 @@
 #include "load_conf.h"
 #include "rdma.h"
 #include "../NtyCo/core/nty_coroutine.h"
-#include "alloc_conf.h"
+#include "../storage/alloc_conf.h"
 #include "build_conf.h"
 
 #if USE_JEMALLOC

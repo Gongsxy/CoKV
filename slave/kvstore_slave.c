@@ -1514,7 +1514,7 @@ int main(int argc, char const *argv[]){
         pthread_detach(tid);
     }
 
-    rdma_init(&gr);
+    // rdma_init(&gr);
 
     malloc_trim(0);
 

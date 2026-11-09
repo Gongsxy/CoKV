@@ -56,7 +56,7 @@ LIB += -ljemalloc
 endif
 
 all:
-	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES_T) $(SOURCES_STORAGE) libbpf-bootstrap/examples/c/.output/resp_capture.o libbpf-bootstrap/examples/c/.output/libbpf.a $(SOURCES_Ntyco) $(LIB)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES_T) $(SOURCES_STORAGE) $(SOURCES_Ntyco) $(LIB)
 
 
 testcase_add:

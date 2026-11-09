@@ -52,7 +52,7 @@ static int co_sleep_ms(int ms)
     its.it_value.tv_sec  = ms / 1000;
     its.it_value.tv_nsec = (long)(ms % 1000) * 1000000L;
     if (its.it_value.tv_sec == 0 && its.it_value.tv_nsec == 0)
-        its.it_value.tv_nsec = 1;              /* È« 0 ´ú±íÍ£ÓÃÓ‹•rÆ÷£¬ÖÁÉÙ½o 1 ÄÎÃë */
+        its.it_value.tv_nsec = 1;              
 
     if (timerfd_settime(tfd, 0, &its, NULL) < 0) {
         close(tfd);
@@ -60,7 +60,7 @@ static int co_sleep_ms(int ms)
     }
 
     uint64_t expirations;
-    ssize_t n = read(tfd, &expirations, sizeof expirations);   /* ±» hook£º×Œ³ö CPU£¬µ½ÆÚ²Å»Øí */
+    ssize_t n = read(tfd, &expirations, sizeof expirations);
     close(tfd);
     return (n == (ssize_t)sizeof expirations) ? 0 : -1;
 }
@@ -150,7 +150,7 @@ static void repl_sender_func(void *arg)
 
         if (!g_repl_collect) {
             fprintf(stderr, "[repl] ringbuf overflow, drop replica, need full resync\n");
-            break;                      // ÇåÀí½»½oŞ’È¦Íâ
+            break;                      // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½oŞ’È¦ï¿½ï¿½
         }
 
         char *p;
@@ -169,7 +169,7 @@ static void repl_sender_func(void *arg)
 
         if(n > 64 * 1024) n = 64 * 1024;
 #ifdef REPL_FAKE_SEND
-        ssize_t s = (ssize_t)n;          /* ¼ÙÑbÒÑ½›ËÍ³ö£¬Ö»Á¿ËÍ³öÖ®Ç°µÄ³É±¾ */
+        ssize_t s = (ssize_t)n;
 #else
         ssize_t s = nty_send(fd, p, n, 0);
 #endif
@@ -186,7 +186,7 @@ static void repl_sender_func(void *arg)
         break;
     }
 
-    if (g_repl_epoch == my_epoch) {              // Ö»ÓĞ×Ô¼ºß€ÊÇ¬FÈÎ²ÅÇåÀí
+    if (g_repl_epoch == my_epoch) {              // Ö»ï¿½ï¿½ï¿½Ô¼ï¿½ß€ï¿½Ç¬Fï¿½Î²ï¿½ï¿½ï¿½ï¿½ï¿½
         if (g_slave.fd == fd) {
             nty_close(fd);
             g_slave.fd = -1;
@@ -406,7 +406,7 @@ void sendfile_full_sync(void *arg){
     g_slave_sr.fd  = -1;
     g_slave_sr.len = g_slave_sr.off = 0;
     fwd_collecting = 0;
-    fwd_queueing   = 1;          // ›]ÓĞß@ĞĞ£¬master_forward_to_slave •şÖ±½Ó return
+    fwd_queueing   = 1;          // ï¿½]ï¿½ï¿½ï¿½@ï¿½Ğ£ï¿½master_forward_to_slave ï¿½ï¿½Ö±ï¿½ï¿½ return
      
 #endif
     
@@ -421,7 +421,7 @@ void sendfile_full_sync(void *arg){
     unsigned gen = bgsave_gen();
 
 #if EBPF
-    int for_repl = 0;      /* eBPF ×Ô¼ºÓĞŞD°lĞÁĞ£¨g_slave_sr£©£¬²»ĞèÒª g_ring */
+    int for_repl = 0;      /* eBPF ï¿½Ô¼ï¿½ï¿½ï¿½ï¿½Dï¿½lï¿½ï¿½ï¿½Ğ£ï¿½g_slave_srï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òª g_ring */
 #else
     int for_repl = 1;
 #endif
@@ -493,7 +493,7 @@ void sendfile_full_sync(void *arg){
 
 #if EBPF
 g_slave_sr.fd  = fd;
-rdma_syncing   = 1;          // ›]ÓĞß@ĞĞ£¬slave_send_func Ò»ßMŞ’È¦¾ÍÍË³ö
+rdma_syncing   = 1;          // ï¿½]ï¿½ï¿½ï¿½@ï¿½Ğ£ï¿½slave_send_func Ò»ï¿½MŞ’È¦ï¿½ï¿½ï¿½Ë³ï¿½
 fwd_collecting = 1;
 if (g_slave_sr.len > g_slave_sr.off && !g_slave_sr.sending) {
     g_slave_sr.sending = 1;
